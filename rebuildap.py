@@ -71,7 +71,7 @@ def create_labels_glob(abs_path: Path):
     return glob.glob(f"{dirname}/*_{abs_path.stem}.txt")
 
 
-def main(
+def t_main(
     filename: str = typer.Argument(..., help="The audio file name."),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose mode."),
 ):
@@ -97,5 +97,19 @@ def main(
         make_label_track(lfile, lblname)
 
 
+def custom_help_check() -> None:
+    """
+    Adds command line options -h and -? in addition to the default --help to
+    show help output.
+    """
+    if "-h" in sys.argv or "-?" in sys.argv:
+        sys.argv[1] = "--help"
+
+
+def main():
+    custom_help_check()
+    typer.run(t_main)
+
+
 if __name__ == "__main__":
-    typer.run(main)
+    main()
