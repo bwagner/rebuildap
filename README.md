@@ -56,6 +56,9 @@ pip install dist/rebuildap-0.0.1-py3-none-any.whl
    - replacing label track
    - replacing audio track
    - adding new label track
+     - challenge: Audacity doesn't support exporting label tracks selectively.
+       There's a [workaround](https://forum.audacityteam.org/t/export-individual-label-when-multiple-labels-in-project/58799/32),
+       However, GetInfo unfortunately exports labels with [limited precision](https://github.com/audacity/audacity/issues/4220).
    - removing label track
 
 ## Contribute
