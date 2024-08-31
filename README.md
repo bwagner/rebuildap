@@ -21,8 +21,8 @@ textual label files.
 
 ## Prerequisites:
  - You need Audacity
- - Enable Preferences>Modules>mod-script-pipe [1]
- - Install Nyquist [2] script:
+ - Enable Preferences>Modules>mod-script-pipe [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
+ - Install Nyquist [Nyquist](https://manual.audacityteam.org/man/nyquist.html) script:
    [ImportLabels.py](https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny)
    Audacity: Nyquist Plugin Installer> navigate to `ImportLabels.ny`
    - Press Apply
@@ -46,10 +46,6 @@ textual label files.
    - replacing audio track
    - adding new label track
    - removing label track
-
-## Links
-1. [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
-2. [Nyquist](https://manual.audacityteam.org/man/nyquist.html)
 
 ## Contribute
 ```console
