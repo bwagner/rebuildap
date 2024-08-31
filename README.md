@@ -22,7 +22,7 @@ textual label files.
 ## Prerequisites:
  - You need Audacity
  - Enable Preferences>Modules>mod-script-pipe [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
- - Install Nyquist [Nyquist](https://manual.audacityteam.org/man/nyquist.html) script:
+ - Install [Nyquist](https://manual.audacityteam.org/man/nyquist.html) script:
    [ImportLabels.py](https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny)
    Audacity: Nyquist Plugin Installer> navigate to `ImportLabels.ny`
    - Press Apply
