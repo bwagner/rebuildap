@@ -31,9 +31,20 @@ textual label files.
    `pip install git+https://github.com/bwagner/pyaudacity`
  - `pip install psutil`
 
+## Build Installable Package
+```console
+python -m venv ~/venv/rap
+source ~/venv/rap/bin/activate
+cd <project_root>
+./mkdist.py
+```
+This creates a `dist` directory containing the installable package.
+Install it via:
+```console
+pip install dist/rebuildap-0.0.1-py3-none-any.whl
+```
+
 ## TODO:
- - make installable
-     - pyproject.toml etc.
  - add command line option to ignore all labels.
  - add command line option to ignore certain labels.
  - add support for "dependencies": Only recreate the
