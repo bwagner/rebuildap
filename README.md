@@ -50,5 +50,13 @@ textual label files.
 ## Links
 1. [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
 2. [Nyquist](https://manual.audacityteam.org/man/nyquist.html)
+
+## Contribute
+```console
+git clone https://github.com/bwagner/rebuildap
+cd rebuildap
+pre-commit install
+```
+
 ## Thank You
 - Steve Daulton for the Nyquist-Script
