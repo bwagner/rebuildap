@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rebuildap"
+authors = [
+  { name="Bernhard Wagner", email="rebuildap@nosuch.biz" },
+]
+description = "rebuild Audacity project"
+readme = "README.md"
+license = { file = "LICENSE.txt"}
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
+dynamic = ["version"]  # this belongs in the [project] section
+dependencies = [
+    "psutil",
+    "typer",
+    "pyaudacity @ git+https://github.com/bwagner/pyaudacity.git",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/bwagner/rebuildap"
+"Bug Tracker" = "https://github.com/bwagner/rebuildap/issues"
+
+[tool.isort]
+profile = 'black'
+
+[project.scripts]
+rebuildap = "rebuildap:main"
+
+[tool.pytest.ini_options]
+addopts = "--doctest-modules"
+doctest_optionflags = "NORMALIZE_WHITESPACE ELLIPSIS"
+testpaths = [
+    "tests",
+]
+
+[tool.hatch.version]
+path = "__about__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true  # required for direct reference currency_file
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
