@@ -2,15 +2,6 @@
 
 rebuildap: rebuild [Audacity](https://www.audacityteam.org/) Project
 
-```shell
-rebuildap.py mysong.mp3
-```
-
-This imports a song in audio format (mp3, wav, anything Audacity can import) into Audacity along
-with label files that might be lying next to it, conforming to the following naming convention:
-Name of the input file: (e.g. `mysong.mp3`), stem of the file, with `*_` prepended and with `.txt`
-appended, e.g. `*_mysong.txt`. This is the file glob.
-
 ## Purpose
 Audacity aup3 files are huge. If you want to maintain them in a repository, every change
 to your labels will generate a new version of the binary aup3 file.
@@ -18,6 +9,35 @@ to your labels will generate a new version of the binary aup3 file.
 Solution: Regenerate the aup3 file from the original audio material + your labels. Now you're only
 keeping track of the (rarely changing) original audio source material and the (more often changing)
 textual label files.
+
+```shell
+ Usage: rebuildap.py [OPTIONS] [FILENAME]
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   filename      [FILENAME]  The audio file name. [default: None]             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --verbose  -v        Enable verbose mode.                                    │
+│ --help               Show this message and exit.                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+When providing an audio file (mp3, wav, anything Audacity can import), that file
+is imported into Audacity along with label files that might be lying next to
+it, conforming to the following naming convention: Stem of the input file name
+with `.txt` appended and anything prepended ending in `_` is considered a label file.
+E.g. with this input audio file `mysong.mp3` all files `*_mysong.txt` are considered
+related label files.
+
+When providing an aup3 file, its label tracks are exported individually.
+
+When not providing a file at all, a running instance of Audacity with a project
+containing label tracks is searched for, of which the selected label tracks are
+exported (all if none are selected).
+
+Note that exporting label tracks is forcedly interactive, as the respective scripting
+command [ExportLabels](https://manual.audacityteam.org/man/scripting_reference.html#:~:text=Description-,ExportLabels%3A,-Export%20Labels)
+fails to offer a non-interactive mode.
 
 ## Prerequisites:
  - macOS. (Windows and Linux are not yet supported)
