@@ -37,23 +37,29 @@ def rebuild(
 
     else:
         if not ap.is_audacity_running:
-            print("No filename passed, Audacity not running. Quitting.")
+            if verbose:
+                print("No filename passed, Audacity not running. Quitting.")
             return
         if not ap.is_audacity_window_open():
-            print("No Audacity window open. Quitting.")
+            if verbose:
+                print("No Audacity window open. Quitting.")
             return
         if af.is_project_empty():
-            print("Audacity project empty. Quitting.")
+            if verbose:
+                print("Audacity project empty. Quitting.")
             return
         if not af.get_label_tracks():
-            print("Audacity project has no label tracks. Quitting.")
+            if verbose:
+                print("Audacity project has no label tracks. Quitting.")
             return
 
         if af.get_selected_label_track_indices():
-            print("exporting selected label track")
+            if verbose:
+                print("exporting selected label track")
             af.export_selected_label_tracks()
         else:
-            print("exporting all label tracks")
+            if verbose:
+                print("exporting all label tracks")
             af.export_label_tracks()
 
 
