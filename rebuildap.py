@@ -7,7 +7,8 @@ from pathlib import Path
 import pyaudacity as pa
 import typer
 
-import audacity_present
+import audacity_funcs as af
+import audacity_present as ap
 
 """
 rebuildap.py song.mp3
@@ -55,16 +56,6 @@ TODO:
         - removing label track
 """
 
-# when mod-script-pipe worked out fine:
-RESPONSE_OK = "\nBatchCommand finshed: OK\n"
-
-
-def make_label_track(label_file, label_track_name):
-    pa.do("SelectTracks: Track=0 Mode=Set")
-    pa.do(f"ImportLabels: fname={label_file}")
-    pa.do(f"SelectTracks: Track={audacity_present.get_track_count() - 1} Mode=Set")
-    pa.do(f"SetTrack: Name={label_track_name}")
-
 
 def create_labels_glob(abs_path: Path):
     dirname = abs_path.parent
@@ -80,7 +71,7 @@ def t_main(
         print(f"{Path(__file__).name} filename")
         return
 
-    audacity_present.assert_audacity(verbose)
+    ap.assert_audacity(verbose)
 
     abs_path = Path(filename).expanduser().resolve()
 
@@ -94,7 +85,7 @@ def t_main(
         lblname = Path(lfile).stem.replace(f"_{abs_path.stem}", "")
         if verbose:
             print(f"labels: >{lblname}<")
-        make_label_track(lfile, lblname)
+        af.make_label_track(lfile, lblname)
 
 
 def custom_help_check() -> None:

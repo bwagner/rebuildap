@@ -1,30 +1,19 @@
 #!/usr/bin/env python
 
-import json
 import os
 import subprocess
 import time
 
 import psutil
-import pyaudacity as pa
 import typer
+
+import audacity_funcs as af
 
 """
 audacity_present.py
 
 
 """
-
-# when mod-script-pipe worked out fine:
-RESPONSE_OK = "\nBatchCommand finshed: OK\n"
-
-
-def is_project_empty():
-    return get_track_count() == 0
-
-
-def get_track_count():
-    return len(json.loads(pa.get_info("Tracks", "JSON")[: -len(RESPONSE_OK)]))
 
 
 def is_audacity_window_open():
@@ -97,7 +86,7 @@ def assert_audacity_running(verbose: bool = True):
 
 
 def assert_audacity_window(verbose: bool = True):
-    if is_audacity_window_open() and is_project_empty():
+    if is_audacity_window_open() and af.is_project_empty():
         if verbose:
             print("An Audacity window is open. Will use this.")
     else:
