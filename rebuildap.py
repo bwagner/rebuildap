@@ -4,7 +4,6 @@ import glob
 import sys
 from pathlib import Path
 
-import pyaudacity as pa
 import typer
 
 import audacity_funcs as af
@@ -13,51 +12,12 @@ import audacity_present as ap
 """
 rebuildap.py song.mp3
 
-rebuildap: rebuild Audacity Project
-
-This imports a song in audio format (mp3, wav, anything Audacity can import) into Audacity along
-with label files that might be lying around, conforming to the following naming convention:
-Name of the input file: (e.g. june_p1ht.mp3), stem of the file, with "*_" prepended and with ".txt"
-appended, e.g. *_june_p1ht.txt. This is the glob.
-
-Purpose: Audacity aup3 files are huge. If you want to maintain them in a repository, every change
-to your labels will generate a new version of the binary aup3 file.
-
-Solution: Regenerate the aup3 file from the original audio material + your labels. Now you're only
-keeping track of the (rarely changing) audio material and the (more often changing) textual label
-files.
-
-Prerequisites:
-    - You need Audacity
-    - Enable Prefernces>Modules>mod-script-pipe
-    - Install Nyquist script:
-      https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny
-      Audacity: Nyquist Plugin Installer> navigate to ImportLabels.ny
-      - Press Apply
-      - Restart Audacity
-    - Install pyaudacity from fork:
-      pip install git+https://github.com/bwagner/pyaudacity
-    - pip install psutil
 
 """
 
-"""
-TODO:
-    - add command line option to ignore all labels.
-    - add command line option to ignore certain labels.
-    - add support for "dependencies": Only recreate the
-      aup3 file if any of the labels or the audio are
-      newer than the aup3.
-    - make git ignore aup3 files
-    - write instructions for:
-        - replacing label track
-        - replacing audio track
-        - adding new label track
-        - removing label track
-"""
 
-
-def create_labels_glob(abs_path: Path):
+def create_labels_glob(filename: str):
+    abs_path = Path(filename).expanduser().resolve()
     dirname = abs_path.parent
     return glob.glob(f"{dirname}/*_{abs_path.stem}.txt")
 
@@ -73,14 +33,13 @@ def t_main(
 
     ap.assert_audacity(verbose)
 
+    if verbose:
+        print(f"Importing {filename}")
+    af.import_audio(filename)
+    if verbose:
+        print(f"Done importing {filename}")
     abs_path = Path(filename).expanduser().resolve()
-
-    if verbose:
-        print(f"Importing {abs_path}")
-    pa.import_audio(abs_path)
-    if verbose:
-        print(f"Done importing {abs_path}")
-    label_files = create_labels_glob(abs_path)
+    label_files = create_labels_glob(filename)
     for lfile in label_files:
         lblname = Path(lfile).stem.replace(f"_{abs_path.stem}", "")
         if verbose:

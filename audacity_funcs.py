@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import json
+from pathlib import Path
 
 import pyaudacity as pa
 import typer
@@ -19,8 +20,12 @@ def is_project_empty():
     return get_track_count() == 0
 
 
+def get_tracks():
+    return json.loads(pa.get_info("Tracks", "JSON")[: -len(RESPONSE_OK)])
+
+
 def get_track_count():
-    return len(json.loads(pa.get_info("Tracks", "JSON")[: -len(RESPONSE_OK)]))
+    return len(get_tracks())
 
 
 def make_label_track(label_file, label_track_name):
@@ -31,8 +36,16 @@ def make_label_track(label_file, label_track_name):
 
 
 def get_focused_tracks():
-    tracks = json.loads(pa.get_info("Tracks", "JSON")[: -len(RESPONSE_OK)])
-    return [track for track in tracks if track["focused"]]
+    return [track for track in get_tracks() if track["focused"]]
+
+
+def get_selected_tracks():
+    return [track for track in get_tracks() if track["selected"]]
+
+
+def import_audio(filename):
+    abs_path = Path(filename).expanduser().resolve()
+    pa.import_audio(abs_path)
 
 
 def main():
