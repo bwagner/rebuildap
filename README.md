@@ -20,6 +20,7 @@ keeping track of the (rarely changing) original audio source material and the (m
 textual label files.
 
 ## Prerequisites:
+ - macOS. (Windows and Linux are not yet supported)
  - You need Audacity
  - Enable Preferences>Modules>mod-script-pipe [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
  - Install [Nyquist](https://manual.audacityteam.org/man/nyquist.html) script:
@@ -45,21 +46,19 @@ pip install dist/rebuildap-0.0.1-py3-none-any.whl
 ```
 
 ## TODO:
- - add command line option to ignore all labels.
- - add command line option to ignore certain labels.
+ - tests
+ - Currently only macOS, no Windows/Linux
  - add support for "dependencies": Only recreate the
    aup3 file if any of the labels or the audio are
    newer than the aup3.
  - make git ignore aup3 files
- - find a way to export a single label track from Audacity.
  - write instructions for:
    - replacing label track
    - replacing audio track
    - adding new label track
-     - challenge: Audacity doesn't support exporting label tracks selectively.
-       There's a [workaround](https://forum.audacityteam.org/t/export-individual-label-when-multiple-labels-in-project/58799/32),
-       However, GetInfo unfortunately exports labels with [limited precision](https://github.com/audacity/audacity/issues/4220).
    - removing label track
+ - add command line option to ignore all labels.
+ - add command line option to ignore certain labels.
 
 ## Contribute
 ```console
@@ -68,5 +67,19 @@ cd rebuildap
 pre-commit install
 ```
 
+## Comments
+Audacity doesn't support exporting label tracks selectively: When exporting via File>Export Other>Export Labels..,
+all labels get thrown together into the same file.
+There's a [workaround](https://forum.audacityteam.org/t/export-individual-label-when-multiple-labels-in-project/58799/32),
+However, GetInfo unfortunately exports labels with [limited precision](https://github.com/audacity/audacity/issues/4220).
+Thus, when exporting labels, we temporarily delete all but one label track at a time, export that track, undo the deletion,
+etc.
+
+## Links
+- [Audacity and Nyquist](https://www.audacity-forum.de/download/edgar/nyquist/nyquist-doc/devel/audacity-nyquist-en.htm)
+- [AudioNyq](https://audionyq.com/)
+- [Audacity Scripting Reference](https://manual.audacityteam.org/man/scripting_reference.html)
+- [Typer](https://typer.tiangolo.com/tutorial/)
+
 ## Thank You
-- Steve Daulton for the Nyquist-Script
+- [Steve Daulton](https://github.com/SteveDaulton) for the Nyquist-Script

@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
-import glob
 import sys
 from pathlib import Path
 
 import typer
+from typing_extensions import Annotated
 
 import audacity_funcs as af
 import audacity_present as ap
@@ -16,35 +16,45 @@ rebuildap.py song.mp3
 """
 
 
-def create_labels_glob(filename: str):
-    abs_path = Path(filename).expanduser().resolve()
-    dirname = abs_path.parent
-    return glob.glob(f"{dirname}/*_{abs_path.stem}.txt")
-
-
-def t_main(
-    filename: str = typer.Argument(..., help="The audio file name."),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose mode."),
+def rebuild(
+    filename: Annotated[str, typer.Argument(..., help="The audio file name.")] = None,
+    verbose: Annotated[
+        bool, typer.Option("-v", "--verbose", help="Enable verbose mode.")
+    ] = False,
 ):
+    if filename:
+        ap.assert_audacity(verbose)
+        af.open_audio(filename, verbose)
+        if af.is_audacity_project(filename):
+            if verbose:
+                print(f"exporting labels from audacity project ({Path(filename).name})")
+            af.export_label_tracks()
+        else:
+            if verbose:
+                print(
+                    f"rebuilt audacity project from audio and labels ({Path(filename).name})"
+                )
 
-    if len(sys.argv) < 2:
-        print(f"{Path(__file__).name} filename")
-        return
+    else:
+        if not ap.is_audacity_running:
+            print("No filename passed, Audacity not running. Quitting.")
+            return
+        if not ap.is_audacity_window_open():
+            print("No Audacity window open. Quitting.")
+            return
+        if af.is_project_empty():
+            print("Audacity project empty. Quitting.")
+            return
+        if not af.get_label_tracks():
+            print("Audacity project has no label tracks. Quitting.")
+            return
 
-    ap.assert_audacity(verbose)
-
-    if verbose:
-        print(f"Importing {filename}")
-    af.import_audio(filename)
-    if verbose:
-        print(f"Done importing {filename}")
-    abs_path = Path(filename).expanduser().resolve()
-    label_files = create_labels_glob(filename)
-    for lfile in label_files:
-        lblname = Path(lfile).stem.replace(f"_{abs_path.stem}", "")
-        if verbose:
-            print(f"labels: >{lblname}<")
-        af.make_label_track(lfile, lblname)
+        if af.get_selected_label_track_indices():
+            print("exporting selected label track")
+            af.export_selected_label_tracks()
+        else:
+            print("exporting all label tracks")
+            af.export_label_tracks()
 
 
 def custom_help_check() -> None:
@@ -58,7 +68,7 @@ def custom_help_check() -> None:
 
 def main():
     custom_help_check()
-    typer.run(t_main)
+    typer.run(rebuild)
 
 
 if __name__ == "__main__":
