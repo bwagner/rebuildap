@@ -74,6 +74,16 @@ def bring_audacity_window_to_front_as():
     subprocess.run(["osascript", "-e", script])
 
 
+def close_audacity_window_as():
+    script = """
+    tell application "Audacity" to activate
+    tell application "System Events"
+        keystroke "w" using command down
+    end tell
+    """
+    subprocess.run(["osascript", "-e", script])
+
+
 def assert_audacity_running(verbose: bool = True):
     if is_audacity_running():
         if verbose:
