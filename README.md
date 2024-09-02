@@ -22,18 +22,18 @@ textual label files.
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-When providing an audio file (mp3, wav, anything Audacity can import), that file
-is imported into Audacity along with label files that might be lying next to
-it, conforming to the following naming convention: Stem of the input file name
-with `.txt` appended and anything prepended ending in `_` is considered a label file.
-E.g. with this input audio file `mysong.mp3` all files `*_mysong.txt` are considered
-related label files.
+When providing an audio file (mp3, wav, anything Audacity can import) for the
+`filename` argument, that file is imported into Audacity along with label files
+that might be lying next to it, conforming to the following naming convention:
+Stem of the input file name with `.txt` appended and anything prepended ending
+in `_` is considered a label file.  E.g. with this input audio file
+`mysong.mp3` all files `*_mysong.txt` are considered related label files.
 
 When providing an aup3 file, its label tracks are exported individually.
 
 When not providing a file at all, a running instance of Audacity with a project
 containing label tracks is searched for, of which the selected label tracks are
-exported (all if none are selected).
+exported or all if none are selected.
 
 Note that exporting label tracks is forcedly interactive, as the respective scripting
 command [ExportLabels](https://manual.audacityteam.org/man/scripting_reference.html#:~:text=Description-,ExportLabels%3A,-Export%20Labels)
