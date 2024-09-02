@@ -66,7 +66,7 @@ pip install dist/rebuildap-0.0.1-py3-none-any.whl
 ```
 
 ## TODO:
- - tests
+ - more tests, smaller tests
  - Currently only macOS, no Windows/Linux
  - add support for "dependencies": Only recreate the
    aup3 file if any of the labels or the audio are
