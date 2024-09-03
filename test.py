@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+import random
+
 import pyaudacity as pa
 import pytest
 
@@ -26,6 +28,7 @@ def undo():
         yield
     finally:
         af.undo()
+        # time.sleep(0.200)
 
 
 @pytest.fixture(scope="function", autouse=False)
@@ -181,9 +184,95 @@ def test_undo_redo(four_tracks):
 def test_mute(four_tracks):
     af.mute_track(1)
     muted_tracks = af.get_muted_tracks()
-    print(muted_tracks)
     assert len(muted_tracks) == 1
     assert muted_tracks[0]["name"] == AUDIO_TRACK_1_NAME
+
+
+def test_solo(four_tracks):
+    af.solo_track(3)
+    solo_tracks = af.get_solo_tracks()
+    assert len(solo_tracks) == 1
+    assert solo_tracks[0]["name"] == AUDIO_TRACK_2_NAME
+
+
+def test_unsolo(four_tracks):
+    af.solo_tracks([1, 3])
+    solo_tracks = af.get_solo_tracks()
+    assert len(solo_tracks) == 2
+    af.unsolo_track(1)
+    solo_tracks = af.get_solo_tracks()
+    assert len(solo_tracks) == 1
+
+
+def test_unsolo_tracks(four_tracks):
+    tracks = [1, 3]
+    af.solo_tracks(tracks)
+    solo_tracks = af.get_solo_tracks()
+    assert len(solo_tracks) == 2
+    af.unsolo_tracks(tracks)
+    solo_tracks = af.get_solo_tracks()
+    assert len(solo_tracks) == 0
+
+
+def test_get_solo_track_indices(four_tracks):
+    af
+    tracks = [1, 3]
+    af.solo_tracks(tracks)
+    assert af.get_solo_track_indices() == tracks
+
+
+def test_get_muted_track_indices(four_tracks):
+    tracks = [1, 3]
+    af.mute_tracks(tracks)
+    assert af.get_muted_track_indices() == tracks
+
+
+def test_unmute_track(four_tracks):
+    tracks = [1, 3]
+    af.mute_tracks(tracks)
+    assert af.get_muted_track_indices() == tracks
+    af.unmute_track(1)
+    assert af.get_muted_track_indices() == [3]
+
+
+def test_unmute_tracks(four_tracks):
+    tracks = [1, 3]
+    af.mute_tracks(tracks)
+    assert af.get_muted_track_indices() == tracks
+    af.unmute_tracks([1])
+    assert af.get_muted_track_indices() == [3]
+
+
+def test_get_selected_label_track_indices(four_tracks_sel):
+    tracks = af.get_selected_label_track_indices()
+    assert len(tracks) == 2
+
+
+def test_get_selected_audio_track_indices(four_tracks_sel):
+    tracks = af.get_selected_audio_track_indices()
+    assert len(tracks) == 1
+
+
+def test_select_track(four_tracks):
+    track = 2
+
+    af.select_track(track)
+    assert af.get_selected_track_indices() == [track]
+
+
+def test_focus_track(four_tracks):
+    track = 2
+
+    af.focus_track(track)
+    assert af.get_focused_track_index() == track
+
+
+def test_focus_track2(four_tracks):
+    track = 2
+
+    af.focus_track(track)
+    assert len(af.get_focused_tracks()) == 1
+    assert af.get_focused_tracks()[0]["name"] == LABEL_TRACK_2_NAME
 
 
 def test_is_audacity_project():
@@ -192,6 +281,19 @@ def test_is_audacity_project():
 
 def test_is_not_audacity_project():
     assert not af.is_audacity_project("bla.mp3")
+
+
+def test_focus(four_tracks):
+    create_audio_track()
+    create_audio_track()
+    create_audio_track()
+    for i in range(af.get_track_count()):
+        af.focus_track(i)
+        assert af.get_focused_track_index() == i
+    for _ in range(af.get_track_count()):
+        j = random.randrange(af.get_track_count())
+        af.focus_track(j)
+        assert af.get_focused_track_index() == j
 
 
 def main():

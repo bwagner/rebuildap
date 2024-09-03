@@ -40,7 +40,7 @@ GET_INFO_JSON = "JSON"
 
 
 @contextmanager
-def temporary_clipboard():
+def save_clipboard():
     original_content = pyperclip.paste()
     try:
         yield
@@ -55,6 +55,15 @@ def save_selection():
         yield
     finally:
         select_tracks(idx)
+
+
+@contextmanager
+def save_focus():
+    idx = get_focused_track_index()
+    try:
+        yield
+    finally:
+        focus_track(idx)
 
 
 def is_project_empty() -> bool:
@@ -115,10 +124,14 @@ def make_label_track_from_file(label_file: str, label_track_name: str):
 
 
 def make_label_track_01(label_file: str, label_track_name: str):
+    """
+    Makes a new label track from the given file and names the label track according to the given name.
+    Uses an unreliable way, hence use not recommended, but might inspire ideas for other funcs.
+    """
     pa.do("NewLabelTrack:")
     pa.do(f'SetTrack: Name="{label_track_name}"')
     count = 1
-    with temporary_clipboard:
+    with save_clipboard:
         with open(label_file) as f:
             for line in f:
                 s_e_l = line.strip().split("\t")
@@ -138,11 +151,30 @@ def get_tracks_by_property(prop: str) -> List[Dict]:
     return [track for track in get_tracks() if prop in track and track[prop]]
 
 
+def get_track_indices_by_property(prop: str) -> List[Dict]:
+    """
+    Returns list of indices of tracks conforming to property.
+    Tested indirectly
+    """
+    return [i for i, track in enumerate(get_tracks()) if prop in track and track[prop]]
+
+
 def get_focused_tracks():
     """
     Returns list of meta info dict for focused tracks.
+    Tested
     """
     return get_tracks_by_property(PROPERTY_FOCUSED)
+
+
+def get_focused_track_index():
+    """
+    Returns the index of the focused track.
+    Tested
+    """
+    for i, track in enumerate(get_tracks()):
+        if track[PROPERTY_FOCUSED]:
+            return i
 
 
 def get_selected_tracks():
@@ -156,6 +188,7 @@ def get_selected_tracks():
 def get_muted_tracks():
     """
     Returns list of meta info dict for muted tracks.
+    Tested
     """
     return get_tracks_by_property(PROPERTY_MUTED)
 
@@ -163,8 +196,112 @@ def get_muted_tracks():
 def get_solo_tracks():
     """
     Returns list of meta info dict for solo tracks.
+    Tested
     """
     return get_tracks_by_property(PROPERTY_SOLO)
+
+
+def get_solo_track_indices():
+    """
+    Returns list of indices of solo tracks.
+    Tested
+    """
+    return get_track_indices_by_property(PROPERTY_SOLO)
+
+
+def get_muted_track_indices():
+    """
+    Returns list of indices of muted tracks.
+    Tested
+    """
+    return get_track_indices_by_property(PROPERTY_MUTED)
+
+
+def toggle_solo_track(track: int):
+    """
+    Toggles solo state of track
+    Tested indirectly
+    """
+    with save_focus():
+        focus_track(track)
+        pa.do("TrackSolo:")
+
+
+def solo_track(track: int):
+    """
+    Soloes the given track.
+    Tested
+    """
+    if track in get_solo_track_indices():
+        return
+    toggle_solo_track(track)
+
+
+def solo_tracks(tracks: List[int]):
+    """
+    Soloes the given tracks.
+    Tested
+    """
+    for track in tracks:
+        solo_track(track)
+
+
+def unsolo_track(track: int):
+    """
+    Unsoloes the given track.
+    Tested
+    """
+    if track not in get_solo_track_indices():
+        return
+    toggle_solo_track(track)
+
+
+def unsolo_tracks(tracks: List[int]):
+    """
+    Unsoloes the given tracks.
+    Tested
+    """
+    for track in tracks:
+        unsolo_track(track)
+
+
+def focus_track(track: int):
+    """
+    Focuses the given track.
+    Optimizes by finding the closes of first, last, currently focused track to the desired
+    new target track.
+    Tested
+    """
+    tc = get_track_count()
+    current_track = get_focused_track_index()
+
+    # Calculate distances
+    distance_from_first = track
+    distance_from_last = tc - track - 1
+    distance_from_current = abs(track - current_track)
+
+    # Determine the minimum distance and the corresponding fixpoint
+    if (
+        distance_from_first <= distance_from_last
+        and distance_from_first <= distance_from_current
+    ):
+        pa.do("FirstTrack:")
+        for _ in range(distance_from_first):
+            pa.do("NextTrack:")
+    elif (
+        distance_from_last <= distance_from_first
+        and distance_from_last <= distance_from_current
+    ):
+        pa.do("LastTrack:")
+        for _ in range(distance_from_last):
+            pa.do("PrevTrack:")
+    else:
+        if track > current_track:
+            for _ in range(distance_from_current):
+                pa.do("NextTrack:")
+        elif track < current_track:
+            for _ in range(distance_from_current):
+                pa.do("PrevTrack:")
 
 
 def mute_track(track: int):
@@ -180,6 +317,7 @@ def mute_track(track: int):
 def mute_tracks(tracks: List[int]):
     """
     Mutes the given tracks.
+    Tested
     """
     with save_selection():
         select_tracks(tracks)
@@ -189,6 +327,7 @@ def mute_tracks(tracks: List[int]):
 def unmute_track(track: int):
     """
     Unmutes the given track.
+    Tested
     """
     with save_selection():
         select_track(track)
@@ -198,6 +337,7 @@ def unmute_track(track: int):
 def unmute_tracks(track: List[int]):
     """
     Unmutes the given tracks.
+    Tested
     """
     with save_selection():
         select_tracks(track)
@@ -207,6 +347,7 @@ def unmute_tracks(track: List[int]):
 def select_track(track: int):
     """
     Selects track
+    Tested
     """
     unselect_tracks()
     pa.do(f"SelectTracks: Track={track} Mode={SELECT_MODE_ADD}")
@@ -276,6 +417,7 @@ def get_tracks_by_kind(kind: str):
 def get_selected_label_track_indices() -> List[int]:
     """
     Returns list of selected label track indices.
+    Tested
     """
     return get_selected_track_indices_by_kind(KIND_LABEL)
 
@@ -283,6 +425,7 @@ def get_selected_label_track_indices() -> List[int]:
 def get_selected_audio_track_indices() -> List[int]:
     """
     Returns list of selected audio track indices.
+    Tested
     """
     return get_selected_track_indices_by_kind(KIND_AUDIO)
 
@@ -290,6 +433,7 @@ def get_selected_audio_track_indices() -> List[int]:
 def get_selected_track_indices_by_kind(kind) -> List[int]:
     """
     Returns list of selected track indices by kind.
+    Tested indirectly
     """
     tracks_kind = get_track_indices_by_kind(kind)
     tracks_selected = get_selected_track_indices()
