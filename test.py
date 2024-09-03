@@ -40,16 +40,16 @@ def four_tracks():
         i = 0
         assert af.get_track_count() == i
         i += 1
-        af.make_label_track(LABEL_TRACK_1_NAME)
+        af.make_label_track(LABEL_TRACK_1_NAME)  # 0
         assert af.get_track_count() == i
         i += 1
-        create_audio_track(AUDIO_TRACK_1_NAME)
+        create_audio_track(AUDIO_TRACK_1_NAME)  # 1
         assert af.get_track_count() == i
         i += 1
-        af.make_label_track(LABEL_TRACK_2_NAME)
+        af.make_label_track(LABEL_TRACK_2_NAME)  # 2
         assert af.get_track_count() == i
         i += 1
-        create_audio_track(AUDIO_TRACK_2_NAME)
+        create_audio_track(AUDIO_TRACK_2_NAME)  # 3
         assert af.get_track_count() == i
         i += 1
         yield
@@ -99,6 +99,7 @@ def test_make_label(undo):
     af.make_label_track(label)
     tracks = af.get_tracks()
     assert len(tracks) == 1
+    assert tracks[0]["name"] == label
 
 
 def test_select_first_audio(four_tracks):
@@ -170,8 +171,19 @@ def test_select(four_tracks):
     assert af.get_selected_track_indices() == [1, 3]
 
 
+def test_undo_redo(four_tracks):
+    af.undo()
+    af.get_track_count() == 3
+    af.redo()
+    af.get_track_count() == 4
+
+
 def test_mute(four_tracks):
-    pass
+    af.mute_track(1)
+    muted_tracks = af.get_muted_tracks()
+    print(muted_tracks)
+    assert len(muted_tracks) == 1
+    assert muted_tracks[0]["name"] == AUDIO_TRACK_1_NAME
 
 
 def test_is_audacity_project():

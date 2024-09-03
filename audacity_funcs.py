@@ -48,6 +48,15 @@ def temporary_clipboard():
         pyperclip.copy(original_content)
 
 
+@contextmanager
+def save_selection():
+    idx = get_selected_track_indices()
+    try:
+        yield
+    finally:
+        select_tracks(idx)
+
+
 def is_project_empty() -> bool:
     """
     Returns true if project is empty, i.e. has no tracks.
@@ -126,7 +135,7 @@ def get_tracks_by_property(prop: str) -> List[Dict]:
     Returns list of meta info dict for tracks conforming to property.
     Tested indirectly
     """
-    return [track for track in get_tracks() if track[prop]]
+    return [track for track in get_tracks() if prop in track and track[prop]]
 
 
 def get_focused_tracks():
@@ -156,6 +165,51 @@ def get_solo_tracks():
     Returns list of meta info dict for solo tracks.
     """
     return get_tracks_by_property(PROPERTY_SOLO)
+
+
+def mute_track(track: int):
+    """
+    Mutes the given track.
+    Tested
+    """
+    with save_selection():
+        select_track(track)
+        pa.do("MuteTracks:")
+
+
+def mute_tracks(tracks: List[int]):
+    """
+    Mutes the given tracks.
+    """
+    with save_selection():
+        select_tracks(tracks)
+        pa.do("MuteTracks:")
+
+
+def unmute_track(track: int):
+    """
+    Unmutes the given track.
+    """
+    with save_selection():
+        select_track(track)
+        pa.do("UnmuteTracks:")
+
+
+def unmute_tracks(track: List[int]):
+    """
+    Unmutes the given tracks.
+    """
+    with save_selection():
+        select_tracks(track)
+        pa.do("UnmuteTracks:")
+
+
+def select_track(track: int):
+    """
+    Selects track
+    """
+    unselect_tracks()
+    pa.do(f"SelectTracks: Track={track} Mode={SELECT_MODE_ADD}")
 
 
 def select_tracks(tracks: List[int]):
@@ -301,6 +355,7 @@ def remove_selected_tracks():
 def undo():
     """
     Undo
+    Tested
     """
     return pa.do("Undo:")
 
@@ -308,6 +363,7 @@ def undo():
 def redo():
     """
     Redo
+    Tested
     """
     return pa.do("Redo:")
 
