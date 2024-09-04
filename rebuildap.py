@@ -29,6 +29,9 @@ def rebuild(
             if verbose:
                 print(f"exporting labels from audacity project ({Path(filename).name})")
             af.export_label_tracks()
+            # TODO: export audio tracks, same naming scheme as labels (but ending in mp3)
+            #       song track: "orig"
+            #       other tracks: guitar (etc.)
         else:
             if verbose:
                 print(

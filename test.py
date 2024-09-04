@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import random
+import time
 
 import pyaudacity as pa
 import pytest
@@ -12,6 +13,8 @@ AUDIO_TRACK_2_NAME = "Second Audio Track"
 
 LABEL_TRACK_1_NAME = "First Label Track"
 LABEL_TRACK_2_NAME = "Second Label Track"
+
+SLEEP_BETWEEN_TESTS = 0.2
 
 
 def create_audio_track(track_name: str = "Audio Track"):
@@ -28,7 +31,6 @@ def undo():
         yield
     finally:
         af.undo()
-        # time.sleep(0.200)
 
 
 @pytest.fixture(scope="function", autouse=False)
@@ -71,6 +73,15 @@ def setup():
     ap.assert_audacity(False)
     yield
     ap.close_audacity_window_as()
+
+
+@pytest.fixture(autouse=True)
+def sleep_between_tests(request):
+    if SLEEP_BETWEEN_TESTS > 0:
+        print(
+            f"\nSleeping for {SLEEP_BETWEEN_TESTS} seconds before running the next test..."
+        )
+        time.sleep(SLEEP_BETWEEN_TESTS)
 
 
 def test_empty():
