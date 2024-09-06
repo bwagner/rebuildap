@@ -2,6 +2,7 @@
 
 import glob
 import json
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List
@@ -113,14 +114,24 @@ def select_first_audio_track():
     pa.do(f"SelectTracks: Track={first_audio_track} Mode={SELECT_MODE_SET}")
 
 
-def make_label_track_from_file(label_file: str, label_track_name: str):
+def make_label_track_from_file(label_file: str, label_track_name: str = None):
     """
     Makes a new label track from the given file and names the label track according to the given name.
     """
-    select_first_audio_track()  # needed for nyquist
-    pa.do(f'ImportLabels: fname="{label_file}"')
-    pa.do(f"SelectTracks: Track={get_track_count() - 1} Mode={SELECT_MODE_SET}")
-    pa.do(f'SetTrack: Name="{label_track_name}"')
+
+    label_track_name = (
+        label_track_name
+        if label_track_name
+        else re.sub(r"_?label_?", "", Path(label_file).stem)
+    )
+    abs_path = Path(label_file).expanduser().resolve()
+
+    with save_selection():
+        select_first_audio_track()  # needed for nyquist
+        pa.do(f"SelTrackStartToEnd:")  # needed for nyquist
+        pa.do(f'ImportLabels: fname="{abs_path}"')
+        pa.do(f"SelectTracks: Track={get_track_count() - 1} Mode={SELECT_MODE_SET}")
+        pa.do(f'SetTrack: Name="{label_track_name}"')
 
 
 def make_label_track_01(label_file: str, label_track_name: str):
