@@ -17,6 +17,7 @@ classifiers = [
 ]
 dynamic = ["version"]  # this belongs in the [project] section
 dependencies = [
+    "pyperclip",
     "psutil",
     "typer",
     "pyaudacity @ git+https://github.com/bwagner/pyaudacity.git",
