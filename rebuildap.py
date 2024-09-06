@@ -21,8 +21,16 @@ def rebuild(
     verbose: Annotated[
         bool, typer.Option("-v", "--verbose", help="Enable verbose mode.")
     ] = False,
+    label: Annotated[
+        bool, typer.Option("-l", "--label", help="Import label file.")
+    ] = False,
 ):
     if filename:
+        if label:
+            if verbose:
+                print(f"importing label into open audacity project.")
+            af.make_label_track_from_file(filename)
+            return
         ap.assert_audacity(verbose)
         af.open_audio(filename, verbose)
         if af.is_audacity_project(filename):
