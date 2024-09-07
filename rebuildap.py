@@ -28,7 +28,7 @@ def rebuild(
     if filename:
         if label:
             if verbose:
-                print(f"importing label into open audacity project.")
+                print("importing label into open audacity project.")
             af.make_label_track_from_file(filename)
             return
         ap.assert_audacity(verbose)

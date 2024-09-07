@@ -66,6 +66,8 @@ pip install dist/rebuildap-0.0.1-py3-none-any.whl
 ```
 
 ## TODO:
+ - allow to create labels with empty names (particularly for beats)
+ - allow to create labels with just the numbers (particularly for bars)
  - write a text file with the used sources to reconstruct the aup3.
    allow also this file as input to the script, which then will
    sheepishly import the files mentioned (instead of being smart)

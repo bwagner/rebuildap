@@ -19,6 +19,13 @@ References
 
 """
 
+LABEL_PART = "part"
+LABEL_CHORD = "chord"
+LABEL_LYRIC = "lyric"
+LABEL_BAR = "bar"
+LABEL_BEAT = "beat"
+LABEL_PRIORITY_ORDER = [LABEL_PART, LABEL_CHORD, LABEL_LYRIC]
+
 AUDACITY_EXTENSION = "aup3"
 
 # when mod-script-pipe worked out fine:
@@ -128,7 +135,7 @@ def make_label_track_from_file(label_file: str, label_track_name: str = None):
 
     with save_selection():
         select_first_audio_track()  # needed for nyquist
-        pa.do(f"SelTrackStartToEnd:")  # needed for nyquist
+        pa.do("SelTrackStartToEnd:")  # needed for nyquist
         pa.do(f'ImportLabels: fname="{abs_path}"')
         pa.do(f"SelectTracks: Track={get_track_count() - 1} Mode={SELECT_MODE_SET}")
         pa.do(f'SetTrack: Name="{label_track_name}"')
@@ -614,6 +621,39 @@ def create_labels_glob(filename: str) -> List[str]:
     return glob.glob(f"{dirname}/*_{abs_path.stem}.txt")
 
 
+def reorder_labels(filenames: List[str]) -> List[str]:
+    """
+    Reorders given label files by this order:
+       1. part
+       2. chord
+       3. lyric
+
+       4. unrecognized
+
+       5. bar (second-to-last)
+       6. beat (last)
+    """
+
+    def get_priority(identifier):
+        # Recognized labels first
+        for i, substring in enumerate(LABEL_PRIORITY_ORDER):
+            if substring in identifier:
+                return i
+        # bar before beat
+        if LABEL_BAR in identifier:
+            return len(LABEL_PRIORITY_ORDER) + 1  # bar come just before beat
+        # beat come last
+        if LABEL_BEAT in identifier:
+            return len(LABEL_PRIORITY_ORDER) + 2  # beat come after bar
+        # Unrecognized labels come just before bars and beat
+        return len(
+            LABEL_PRIORITY_ORDER
+        )  # Unrecognized labels go between recognized and bar/beat
+
+    # Sort filenames using the modified priority
+    return sorted(filenames, key=get_priority)
+
+
 def open_audio(filename: str, verbose=False):
     """
     Opens the audio file given by name.
@@ -634,7 +674,7 @@ def open_audio(filename: str, verbose=False):
         if verbose:
             print(f'Done importing "{filename}"')
         abs_path = Path(filename).expanduser().resolve()
-        label_files = create_labels_glob(filename)
+        label_files = reorder_labels(create_labels_glob(filename))
         for lfile in label_files:
             lblname = Path(lfile).stem.replace(f"_{abs_path.stem}", "")
             if verbose:

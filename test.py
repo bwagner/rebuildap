@@ -14,7 +14,7 @@ AUDIO_TRACK_2_NAME = "Second Audio Track"
 LABEL_TRACK_1_NAME = "First Label Track"
 LABEL_TRACK_2_NAME = "Second Label Track"
 
-SLEEP_BETWEEN_TESTS = 0.2
+SLEEP_BETWEEN_TESTS = 0.3
 
 
 def create_audio_track(track_name: str = "Audio Track"):
@@ -284,6 +284,48 @@ def test_focus_track2(four_tracks):
     af.focus_track(track)
     assert len(af.get_focused_tracks()) == 1
     assert af.get_focused_tracks()[0]["name"] == LABEL_TRACK_2_NAME
+
+
+# Test cases using pytest's parametrize
+@pytest.mark.parametrize(
+    "identifiers, expected",
+    [
+        # Test case 1: Basic ordering with one match per identifier
+        (
+            ["part_001", "chord_A", "lyrics_01", "bar_10", "beat_100"],
+            ["part_001", "chord_A", "lyrics_01", "bar_10", "beat_100"],
+        ),
+        # Test case 2: No matches, so unrecognized items go before bars and beats
+        (
+            ["alpha", "beta", "gamma", "bar_10", "beat_100"],
+            ["alpha", "beta", "gamma", "bar_10", "beat_100"],
+        ),
+        # Test case 3: Bars and beats should always be at the end, even if others are recognized
+        (
+            ["chord_A", "lyrics_01", "random", "beat_100", "bar_10"],
+            ["chord_A", "lyrics_01", "random", "bar_10", "beat_100"],
+        ),
+        # Test case 4: Bars and beats should still be ordered at the end with unrecognized before them
+        (
+            ["part_001", "random_label", "beat_100", "bar_10"],
+            ["part_001", "random_label", "bar_10", "beat_100"],
+        ),
+        # Test case 5: No recognized labels, but bars and beats should still be at the end
+        (
+            ["random_01", "random_02", "bar_10", "beat_100"],
+            ["random_01", "random_02", "bar_10", "beat_100"],
+        ),
+        # Test case 6: Only bars and beats should be sorted properly
+        (["beat_100", "bar_10"], ["bar_10", "beat_100"]),
+        # Test case 7: Mixed ordering with recognized and unrecognized labels
+        (
+            ["beat_100", "part_002", "chord_B", "random_label", "bar_10"],
+            ["part_002", "chord_B", "random_label", "bar_10", "beat_100"],
+        ),
+    ],
+)
+def test_reorder_labels(identifiers, expected):
+    assert af.reorder_labels(identifiers) == expected
 
 
 def test_is_audacity_project():
