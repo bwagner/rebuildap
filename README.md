@@ -10,7 +10,7 @@ Solution: Regenerate the aup3 file from the original audio material + your label
 keeping track of the (rarely changing) original audio source material and the (more often changing)
 textual label files.
 
-```shell
+```console
  Usage: rebuildap.py [OPTIONS] [FILENAME]
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────╮
