@@ -66,6 +66,7 @@ pip install dist/rebuildap-0.0.1-py3-none-any.whl
 ```
 
 ## TODO:
+ - allow additional audio tracks
  - write a text file with the used sources to reconstruct the aup3.
    allow also this file as input to the script, which then will
    sheepishly import the files mentioned (instead of being smart)
