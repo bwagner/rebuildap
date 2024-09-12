@@ -99,6 +99,10 @@ However, GetInfo unfortunately exports labels with [limited precision](https://g
 Thus, when exporting labels, we temporarily delete all but one label track at a time, export that track, undo the deletion,
 etc.
 
+## See also
+[shift_labels](ttps://github.com/bwagner/shift_labels), [beats2bars](ttps://github.com/bwagner/beats2bars), [pyaudacity](ttps://github.com/bwagner/pyaudacity)
+
+
 ## Links
 - [Audacity and Nyquist](https://www.audacity-forum.de/download/edgar/nyquist/nyquist-doc/devel/audacity-nyquist-en.htm)
 - [AudioNyq](https://audionyq.com/)
