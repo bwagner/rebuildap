@@ -100,7 +100,7 @@ Thus, when exporting labels, we temporarily delete all but one label track at a 
 etc.
 
 ## See also
-[shift_labels](ttps://github.com/bwagner/shift_labels), [beats2bars](ttps://github.com/bwagner/beats2bars), [pyaudacity](ttps://github.com/bwagner/pyaudacity)
+[shift_labels](https://github.com/bwagner/shift_labels), [beats2bars](https://github.com/bwagner/beats2bars), [pyaudacity](https://github.com/bwagner/pyaudacity)
 
 
 ## Links
