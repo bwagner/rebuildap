@@ -99,8 +99,18 @@ However, GetInfo unfortunately exports labels with [limited precision](https://g
 Thus, when exporting labels, we temporarily delete all but one label track at a time, export that track, undo the deletion,
 etc.
 
+## Contribute
+```console
+pre-commit install
+```
+if this fails
+```
+pip install pre-commit
+```
+(see [pre-commit](https://pre-commit.com/))
+
 ## See also
-[shift_labels](https://github.com/bwagner/shift_labels), [beats2bars](https://github.com/bwagner/beats2bars), [pyaudacity](https://github.com/bwagner/pyaudacity)
+[shift_labels](https://github.com/bwagner/shift_labels), [quantize_labels](https://github.com/bwagner/quantize_labels), [beats2bars](https://github.com/bwagner/beats2bars), [pyaudacity](https://github.com/bwagner/pyaudacity)
 
 
 ## Links
