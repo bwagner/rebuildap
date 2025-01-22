@@ -48,3 +48,6 @@ allow-direct-references = true  # required for direct reference currency_file
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
+
+[tool.hatch.build]
+exclude = ["venv/**"]

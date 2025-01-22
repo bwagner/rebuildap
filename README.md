@@ -39,12 +39,12 @@ Note that exporting label tracks is forcedly interactive, as the respective scri
 command [ExportLabels](https://manual.audacityteam.org/man/scripting_reference.html#:~:text=Description-,ExportLabels%3A,-Export%20Labels)
 fails to offer a non-interactive mode.
 
-## Prerequisites:
+## Prerequisites
  - macOS. (Windows and Linux are not yet supported)
- - You need Audacity
+ - You need [Audacity](https://www.audacityteam.org/)
  - Enable Preferences>Modules>mod-script-pipe [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
  - Install [Nyquist](https://manual.audacityteam.org/man/nyquist.html) script:
-   [ImportLabels.py](https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny)
+   [ImportLabels.ny](https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny)
    Audacity: Nyquist Plugin Installer> navigate to `ImportLabels.ny`
    - Press Apply
    - Restart Audacity
@@ -90,6 +90,7 @@ git clone https://github.com/bwagner/rebuildap
 cd rebuildap
 pre-commit install
 ```
+if `pre-commit install` fails, issue `pip install pre-commit` (see [pre-commit](https://pre-commit.com/))
 
 ## Comments
 Audacity doesn't support exporting label tracks selectively: When exporting via File>Export Other>Export Labels..,
@@ -98,16 +99,6 @@ There's a [workaround](https://forum.audacityteam.org/t/export-individual-label-
 However, GetInfo unfortunately exports labels with [limited precision](https://github.com/audacity/audacity/issues/4220).
 Thus, when exporting labels, we temporarily delete all but one label track at a time, export that track, undo the deletion,
 etc.
-
-## Contribute
-```console
-pre-commit install
-```
-if this fails
-```
-pip install pre-commit
-```
-(see [pre-commit](https://pre-commit.com/))
 
 ## See also
 [shift_labels](https://github.com/bwagner/shift_labels), [quantize_labels](https://github.com/bwagner/quantize_labels), [beats2bars](https://github.com/bwagner/beats2bars), [pyaudacity](https://github.com/bwagner/pyaudacity)
