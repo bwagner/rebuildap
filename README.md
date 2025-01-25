@@ -65,10 +65,10 @@ Install it via:
 pip install dist/rebuildap-0.0.1-py3-none-any.whl
 ```
 
-## TODO:
+## TODO
  - allow additional audio tracks
  - write a text file with the used sources to reconstruct the aup3.
-   allow also this file as input to the script, which then will
+   Allow also this file as input to the script, which then will
    sheepishly import the files mentioned (instead of being smart)
  - more tests
  - Currently only macOS, no Windows/Linux
@@ -96,7 +96,7 @@ if `pre-commit install` fails, issue `pip install pre-commit` (see [pre-commit](
 Audacity doesn't support exporting label tracks selectively: When exporting via File>Export Other>Export Labels..,
 all labels get thrown together into the same file.
 There's a [workaround](https://forum.audacityteam.org/t/export-individual-label-when-multiple-labels-in-project/58799/32),
-However, GetInfo unfortunately exports labels with [limited precision](https://github.com/audacity/audacity/issues/4220).
+however, GetInfo unfortunately exports labels with [limited precision](https://github.com/audacity/audacity/issues/4220).
 Thus, when exporting labels, we temporarily delete all but one label track at a time, export that track, undo the deletion,
 etc.
 
