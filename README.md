@@ -45,7 +45,7 @@ fails to offer a non-interactive mode.
  - Enable Preferences>Modules>mod-script-pipe [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
  - Install [Nyquist](https://manual.audacityteam.org/man/nyquist.html) script:
    [ImportLabels.ny](https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny)
-   Audacity: Nyquist Plugin Installer> navigate to `ImportLabels.ny`
+   Audacity: Tools> Nyquist Plugin Installer> navigate to `ImportLabels.ny`
    - Press Apply
    - Restart Audacity
  - Install pyaudacity from fork:
