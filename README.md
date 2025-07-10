@@ -39,6 +39,15 @@ Note that exporting label tracks is forcedly interactive, as the respective scri
 command [ExportLabels](https://manual.audacityteam.org/man/scripting_reference.html#:~:text=Description-,ExportLabels%3A,-Export%20Labels)
 fails to offer a non-interactive mode.
 
+## Recommendation
+In order to consistently prevent git from tracking Audacity files, add these lines to
+the `.gitignore` file of your project:
+```
+*.aup3
+*.aup3-shm
+*.aup3-wal
+```
+
 ## Prerequisites
  - macOS. (Windows and Linux are not yet supported)
  - You need [Audacity](https://www.audacityteam.org/)
@@ -51,19 +60,15 @@ fails to offer a non-interactive mode.
  - Install pyaudacity from fork:
    `pip install git+https://github.com/bwagner/pyaudacity`
  - `pip install psutil`
+- [uv](https://docs.astral.sh/uv/)
 
-## Build Installable Package
+## Install
 ```console
-python -m venv ~/venv/rap
-source ~/venv/rap/bin/activate
 cd <project_root>
 ./mkdist.py
 ```
-This creates a `dist` directory containing the installable package.
-Install it via:
-```console
-pip install dist/rebuildap-0.0.1-py3-none-any.whl
-```
+This uses [uv](https://docs.astral.sh/uv/) to create a wheel file in the `dist/` directory
+and subsequently installs it such that rebuildap is globally available on your machine.
 
 ## TODO
  - allow additional audio tracks
@@ -75,7 +80,6 @@ pip install dist/rebuildap-0.0.1-py3-none-any.whl
  - add support for "dependencies": Only recreate the
    aup3 file if any of the labels or the audio are
    newer than the aup3.
- - make git ignore aup3 files
  - write instructions for:
    - replacing label track
    - replacing audio track
