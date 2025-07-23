@@ -49,17 +49,17 @@ the `.gitignore` file of your project:
 ```
 
 ## Prerequisites
- - macOS. (Windows and Linux are not yet supported)
- - You need [Audacity](https://www.audacityteam.org/)
- - Enable Preferences>Modules>mod-script-pipe [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
- - Install [Nyquist](https://manual.audacityteam.org/man/nyquist.html) script:
-   [ImportLabels.ny](https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny)
-   Audacity: Tools> Nyquist Plugin Installer> navigate to `ImportLabels.ny`
-   - Press Apply
-   - Restart Audacity
- - Install pyaudacity from fork:
-   `pip install git+https://github.com/bwagner/pyaudacity`
- - `pip install psutil`
+- macOS. (Windows and Linux are not yet supported)
+- You need [Audacity](https://www.audacityteam.org/)
+- Enable Preferences>Modules>mod-script-pipe [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
+- Install [Nyquist](https://manual.audacityteam.org/man/nyquist.html) script:
+  [ImportLabels.ny](https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny)
+  Audacity: Tools> Nyquist Plugin Installer> navigate to `ImportLabels.ny`
+    - Press Apply
+    - Restart Audacity
+- Install pyaudacity from fork:
+  `pip install git+https://github.com/bwagner/pyaudacity`
+- `pip install psutil`
 - [uv](https://docs.astral.sh/uv/)
 
 ## Install
@@ -71,22 +71,28 @@ This uses [uv](https://docs.astral.sh/uv/) to create a wheel file in the `dist/`
 and subsequently installs it such that rebuildap is globally available on your machine.
 
 ## TODO
- - allow additional audio tracks
- - write a text file with the used sources to reconstruct the aup3.
-   Allow also this file as input to the script, which then will
-   sheepishly import the files mentioned (instead of being smart)
- - more tests
- - Currently only macOS, no Windows/Linux
- - add support for "dependencies": Only recreate the
-   aup3 file if any of the labels or the audio are
-   newer than the aup3.
- - write instructions for:
-   - replacing label track
-   - replacing audio track
-   - adding new label track
-   - removing label track
- - add command line option to ignore all labels.
- - add command line option to ignore certain labels.
+- allow additional audio tracks
+- write a text file with the used sources to reconstruct the aup3.
+  Allow also this file as input to the script, which then will
+  sheepishly import the files mentioned (instead of being smart)
+- more tests
+- Currently only macOS, no Windows/Linux
+- add support for "dependencies": Only recreate the
+  aup3 file if any of the labels or the audio are
+  newer than the aup3.
+- add functionality to check whether the label tracks in the aup3 are newer than the exported label files.
+  If so, compare whether the label tracks have additional / corrected info. If so, update the label files.
+    1. check the aup3 file date against every label file date. For every label file that is older than the aup3 file,
+       check whether the label track in the aup3 file has additional/changed labels. If so, perform a diff between
+       the checked in label file and the label track in the aup3 file and let the user decide whether to
+       update the label file, giving instructions how to commit changes.
+- write instructions for:
+    - replacing label track
+    - replacing audio track
+    - adding new label track
+    - removing label track
+- add command line option to ignore all labels.
+- add command line option to ignore certain labels.
 
 ## Contribute
 ```console
