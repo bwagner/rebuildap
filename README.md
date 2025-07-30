@@ -18,6 +18,9 @@ textual label files.
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────╮
 │ --verbose  -v        Enable verbose mode.                                    │
+│ --label    -l        Import label file.                                      │
+│ --check    -c        Check whether audacity file newer than label files and  │
+│                      show differences.                                       │
 │ --help               Show this message and exit.                             │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```

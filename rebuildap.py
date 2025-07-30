@@ -129,7 +129,9 @@ def rebuild(
     check: Annotated[
         bool,
         typer.Option(
-            "-c", "--check", help="Check whether audacity file newer than label files."
+            "-c",
+            "--check",
+            help="Check whether audacity file newer than label files and show differences.",
         ),
     ] = False,
 ):
