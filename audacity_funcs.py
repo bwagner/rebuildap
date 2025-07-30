@@ -5,7 +5,7 @@ import json
 import re
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pyaudacity as pa
 import pyperclip
@@ -31,13 +31,19 @@ AUDACITY_EXTENSION = "aup3"
 # when mod-script-pipe worked out fine:
 RESPONSE_OK = "\nBatchCommand finshed: OK\n"
 
-KIND_LABEL = "label"
 KIND_AUDIO = "wave"
-PROPERTY_KIND = "kind"
+KIND_LABEL = "label"
+PROPERTY_CHANNELS = "channels"
+PROPERTY_END = "end"
 PROPERTY_FOCUSED = "focused"
-PROPERTY_SELECTED = "selected"
+PROPERTY_KIND = "kind"
 PROPERTY_MUTED = "mute"
+PROPERTY_NAME = "name"
+PROPERTY_PAN = "pan"
+PROPERTY_SELECTED = "selected"
 PROPERTY_SOLO = "solo"
+PROPERTY_START = "start"
+PROPERTY_VOLUME = "volume"
 
 SELECT_MODE_SET = "Set"
 SELECT_MODE_ADD = "Add"
@@ -45,6 +51,50 @@ SELECT_MODE_REMOVE = "Remove"
 
 GET_INFO_TRACKS = "Tracks"
 GET_INFO_JSON = "JSON"
+
+
+def is_track_focused(track):
+    return track[PROPERTY_FOCUSED] == 1
+
+
+def is_track_selected(track):
+    return track[PROPERTY_SELECTED] == 1
+
+
+def get_track_start(track):
+    return track[PROPERTY_START]
+
+
+def get_track_end(track):
+    return track[PROPERTY_END]
+
+
+def get_track_pan(track):
+    return track[PROPERTY_PAN]
+
+
+def get_track_volume(track):
+    return track[PROPERTY_VOLUME]
+
+
+def get_track_channels(track):
+    return track[PROPERTY_CHANNELS]
+
+
+def is_track_solo(track):
+    return track[PROPERTY_SOLO] == 1
+
+
+def is_track_muted(track):
+    return track[PROPERTY_MUTED] == 1
+
+
+def is_audio_track(track):
+    return track[PROPERTY_KIND] == KIND_AUDIO
+
+
+def get_track_name(track):
+    return track[PROPERTY_NAME]
 
 
 @contextmanager
@@ -96,6 +146,23 @@ def get_track_count() -> int:
     Tested
     """
     return len(get_tracks())
+
+
+def quit_audacity():
+    """
+    Quits Audacity app.
+    """
+    pa.do("Exit:")
+
+
+def close_project():
+    """
+    Closes the Audacity project.
+    """
+    # note:
+    # undoing make_label_track will remove the label track
+    # issuing redo after this will recreate the label track but not set its name as it was!
+    pa.do("Close:")
 
 
 def make_label_track(label_track_name: str):
@@ -169,7 +236,7 @@ def get_tracks_by_property(prop: str) -> List[Dict]:
     return [track for track in get_tracks() if prop in track and track[prop]]
 
 
-def get_track_indices_by_property(prop: str) -> List[Dict]:
+def get_track_indices_by_property(prop: str) -> List[int]:
     """
     Returns list of indices of tracks conforming to property.
     Tested indirectly
@@ -185,7 +252,7 @@ def get_focused_tracks():
     return get_tracks_by_property(PROPERTY_FOCUSED)
 
 
-def get_focused_track_index():
+def get_focused_track_index() -> Optional[int]:
     """
     Returns the index of the focused track.
     Tested
@@ -193,6 +260,7 @@ def get_focused_track_index():
     for i, track in enumerate(get_tracks()):
         if track[PROPERTY_FOCUSED]:
             return i
+    return None
 
 
 def get_selected_tracks():
@@ -203,7 +271,7 @@ def get_selected_tracks():
     return get_tracks_by_property(PROPERTY_SELECTED)
 
 
-def get_muted_tracks():
+def get_muted_tracks() -> List[Dict]:
     """
     Returns list of meta info dict for muted tracks.
     Tested
@@ -211,7 +279,7 @@ def get_muted_tracks():
     return get_tracks_by_property(PROPERTY_MUTED)
 
 
-def get_solo_tracks():
+def get_solo_tracks() -> List[Dict]:
     """
     Returns list of meta info dict for solo tracks.
     Tested
@@ -219,7 +287,7 @@ def get_solo_tracks():
     return get_tracks_by_property(PROPERTY_SOLO)
 
 
-def get_solo_track_indices():
+def get_solo_track_indices() -> List[int]:
     """
     Returns list of indices of solo tracks.
     Tested
@@ -227,7 +295,7 @@ def get_solo_track_indices():
     return get_track_indices_by_property(PROPERTY_SOLO)
 
 
-def get_muted_track_indices():
+def get_muted_track_indices() -> List[int]:
     """
     Returns list of indices of muted tracks.
     Tested
@@ -424,7 +492,7 @@ def select_audio_tracks():
     return select_tracks_by_kind(KIND_AUDIO)
 
 
-def get_tracks_by_kind(kind: str):
+def get_tracks_by_kind(kind: str) -> List[Dict]:
     """
     Returns list of track meta info for tracks of given kind.
     Tested (indirectly)
@@ -544,11 +612,28 @@ def export_labels_list(labels: List[int]):
     Exports label tracks given by track number.
     """
     for idx in labels:
-        select_label_tracks()
-        unselect_track(idx)
-        remove_selected_tracks()
-        export_labels()
-        undo()
+        export_label_of_idx(idx)
+
+
+def export_label_of_idx(idx):
+    """
+    Exports label track given by track index.
+
+    Interactive due to export_labels' interactivity.
+
+    Since Audacity does not allow to export a single label track,
+    this function does the following:
+    1. selects all label tracks,
+    2. unselects the label track given by idx,
+    3. removes all selected label tracks,
+    4. exports labels (which is now one label track)
+    5. undoes the removing of all label tracks, to restore the project to its original state.
+    """
+    select_label_tracks()
+    unselect_track(idx)
+    remove_selected_tracks()
+    export_labels()
+    undo()
 
 
 def export_selected_label_tracks():

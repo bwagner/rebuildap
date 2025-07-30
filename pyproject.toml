@@ -21,6 +21,7 @@ dependencies = [
     "psutil",
     "typer",
     "pyaudacity @ git+https://github.com/bwagner/pyaudacity.git",
+    "pytest>=7.4.4",
 ]
 
 [project.urls]

@@ -8,6 +8,11 @@ import pytest
 import audacity_funcs as af
 import audacity_present as ap
 
+"""
+NOTE: You need to grant PyCharm the right to control your computer
+in System Preferences > Security & Privacy > Accessibility
+"""
+
 AUDIO_TRACK_1_NAME = "First Audio Track"
 AUDIO_TRACK_2_NAME = "Second Audio Track"
 
@@ -96,16 +101,16 @@ def test_audio_track(audio_track):
     tracks = af.get_tracks()
     assert len(tracks) == 1
     track = tracks[0]
-    assert track["focused"] == 1
-    assert track["selected"] == 1
-    assert track["kind"] == "wave"
-    assert track["start"] == 1
-    assert track["end"] == 3
-    assert track["pan"] == 0
-    assert track["gain"] == 1
-    assert track["channels"] == 1
-    assert track["solo"] == 0
-    assert track["mute"] == 0
+    assert af.is_track_focused(track)
+    assert af.is_track_selected(track)
+    assert af.is_audio_track(track)
+    assert af.get_track_start(track) == 1
+    assert af.get_track_end(track) == 3
+    assert af.get_track_pan(track) == 0
+    assert af.get_track_volume(track) == 1
+    assert af.get_track_channels(track) == 1
+    assert not af.is_track_solo(track)
+    assert not af.is_track_muted(track)
 
 
 def test_make_label(undo):
@@ -113,34 +118,29 @@ def test_make_label(undo):
     af.make_label_track(label)
     tracks = af.get_tracks()
     assert len(tracks) == 1
-    assert tracks[0]["name"] == label
+    assert af.get_track_name(tracks[0]) == label
 
 
 def test_select_first_audio(four_tracks):
     af.select_first_audio_track()
     tracks = af.get_selected_tracks()
     assert len(tracks) == 1
-    track = tracks[0]
-    assert track["name"] == AUDIO_TRACK_1_NAME
+    assert af.get_track_name(tracks[0]) == AUDIO_TRACK_1_NAME
 
 
 def test_select_all_audio(four_tracks):
     tracks = af.get_audio_tracks()
     assert len(tracks) == 2
-    track = tracks[0]
-    assert track["name"] == AUDIO_TRACK_1_NAME
-    track = tracks[1]
-    assert track["name"] == AUDIO_TRACK_2_NAME
+    assert af.get_track_name(tracks[0]) == AUDIO_TRACK_1_NAME
+    assert af.get_track_name(tracks[1]) == AUDIO_TRACK_2_NAME
     assert af.get_audio_track_indices() == [1, 3]
 
 
 def test_select_all_label(four_tracks):
     tracks = af.get_label_tracks()
     assert len(tracks) == 2
-    track = tracks[0]
-    assert track["name"] == LABEL_TRACK_1_NAME
-    track = tracks[1]
-    assert track["name"] == LABEL_TRACK_2_NAME
+    assert af.get_track_name(tracks[0]) == LABEL_TRACK_1_NAME
+    assert af.get_track_name(tracks[1]) == LABEL_TRACK_2_NAME
     assert af.get_label_track_indices() == [0, 2]
 
 
@@ -169,15 +169,14 @@ def test_remove_sel_tracks(four_tracks):
     af.remove_selected_tracks()
     tracks = af.get_tracks()
     assert len(tracks) == 2
-    assert tracks[0]["name"] == LABEL_TRACK_1_NAME
-    assert tracks[1]["name"] == LABEL_TRACK_2_NAME
+    assert af.get_track_name(tracks[0]) == LABEL_TRACK_1_NAME
+    assert af.get_track_name(tracks[1]) == LABEL_TRACK_2_NAME
 
     for i in range(3):
         af.undo()
 
 
 def test_select(four_tracks):
-
     af.select_label_tracks()
     assert af.get_selected_track_indices() == [0, 2]
 
@@ -187,23 +186,23 @@ def test_select(four_tracks):
 
 def test_undo_redo(four_tracks):
     af.undo()
-    af.get_track_count() == 3
+    assert af.get_track_count() == 3
     af.redo()
-    af.get_track_count() == 4
+    assert af.get_track_count() == 4
 
 
 def test_mute(four_tracks):
     af.mute_track(1)
     muted_tracks = af.get_muted_tracks()
     assert len(muted_tracks) == 1
-    assert muted_tracks[0]["name"] == AUDIO_TRACK_1_NAME
+    assert af.get_track_name(muted_tracks[0]) == AUDIO_TRACK_1_NAME
 
 
 def test_solo(four_tracks):
     af.solo_track(3)
     solo_tracks = af.get_solo_tracks()
     assert len(solo_tracks) == 1
-    assert solo_tracks[0]["name"] == AUDIO_TRACK_2_NAME
+    assert af.get_track_name(solo_tracks[0]) == AUDIO_TRACK_2_NAME
 
 
 def test_unsolo(four_tracks):
@@ -283,7 +282,7 @@ def test_focus_track2(four_tracks):
 
     af.focus_track(track)
     assert len(af.get_focused_tracks()) == 1
-    assert af.get_focused_tracks()[0]["name"] == LABEL_TRACK_2_NAME
+    assert af.get_track_name(af.get_focused_tracks()[0]) == LABEL_TRACK_2_NAME
 
 
 # Test cases using pytest's parametrize
