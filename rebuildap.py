@@ -167,19 +167,21 @@ def rebuild(
             af.export_label_tracks()
 
 
-if __name__ == "__main__":
+def custom_help_check() -> None:
+    """
+    Adds command line options -h and -? in addition to the default --help to
+    show help output.
+    """
     import sys
 
-    def custom_help_check() -> None:
-        """
-        Adds command line options -h and -? in addition to the default --help to
-        show help output.
-        """
-        if "-h" in sys.argv or "-?" in sys.argv:
-            sys.argv[1] = "--help"
+    if "-h" in sys.argv or "-?" in sys.argv:
+        sys.argv[1] = "--help"
 
-    def main():
-        typer.run(rebuild)
 
+def main():
     custom_help_check()
+    typer.run(rebuild)
+
+
+if __name__ == "__main__":
     main()
