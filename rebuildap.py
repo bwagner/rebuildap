@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import difflib
+import re
 from pathlib import Path
 
 import typer
@@ -7,12 +8,44 @@ from typing_extensions import Annotated
 
 import audacity_funcs as af
 import audacity_present as ap
+from utils import cut_trailing_zeros
 
 """
 rebuildap.py song.mp3
 
 
 """
+
+
+def is_float(s):
+    """Return True if s is a valid Python float literal (excluding scientific notation)."""
+    float_like = re.compile(r"^-?(?:\d+\.\d*|\.\d+|\d+)$")
+    return bool(float_like.match(s))
+
+
+def process_lines(lines):
+    result = []
+    for line in lines:
+        parts = line.strip().split("\t")
+
+        if len(parts) == 1 and is_float(parts[0]):
+            f = cut_trailing_zeros(parts[0])
+            result.append(f"{f}\t{f}\n")
+        elif len(parts) == 2 and is_float(parts[0]) and not is_float(parts[1]):
+            f = cut_trailing_zeros(parts[0])
+            result.append(f"{f}\t{f}\t{parts[1]}\n")
+        elif len(parts) == 2 and is_float(parts[0]) and is_float(parts[1]):
+            f1 = cut_trailing_zeros(parts[0])
+            f2 = cut_trailing_zeros(parts[1])
+            result.append(f"{f1}\t{f2}\n")
+        elif len(parts) == 3 and is_float(parts[0]) and is_float(parts[1]):
+            f1 = cut_trailing_zeros(parts[0])
+            f2 = cut_trailing_zeros(parts[1])
+            result.append(f"{f1}\t{f2}\t{parts[2]}\n")
+        else:
+            result.append(line)
+
+    return result
 
 
 def check_label_age(filename, verbose):
@@ -65,6 +98,8 @@ def check_label_age(filename, verbose):
         af.close_project()
         # NOTE: these files are typically named "chords.txt", not "chords_songname.txt"
 
+        dismissed_labels = []
+
         for label_file in outdated_candidates:
             exported_label_name = (
                 Path(label_file.name).stem.replace(f"_{Path(filename.name).stem}", "")
@@ -72,11 +107,17 @@ def check_label_age(filename, verbose):
             )
             if verbose:
                 print(f"{label_file.name} is older than {filename.name}")
+                labels_from_file = process_lines(
+                    label_file.read_text().splitlines(keepends=True)
+                )
+                labels_from_proj = process_lines(
+                    Path(exported_label_name).read_text().splitlines(keepends=True)
+                )
                 sm = difflib.unified_diff(
-                    label_file.read_text().splitlines(keepends=True),
-                    Path(exported_label_name).read_text().splitlines(keepends=True),
+                    labels_from_file,
+                    labels_from_proj,
                     fromfile=str(label_file),
-                    tofile=exported_label_name,
+                    tofile=f"exported label file {exported_label_name}",
                 )
                 if any(sm):
                     print(
@@ -87,11 +128,19 @@ def check_label_age(filename, verbose):
                     print(
                         f"Label file {label_file.name} and exported label file {exported_label_name} are identical."
                     )
+                    dismissed_labels.append(exported_label_name)
             else:
                 if verbose:
                     print(
                         f"{label_file.name} is newer than {filename.name} (nothing to do)"
                     )
+                    dismissed_labels.append(exported_label_name)
+
+        # delete the exported label files that are identical to the label files
+        for label_file in dismissed_labels:
+            if verbose:
+                print(f"Deleting exported label file {label_file}")
+            Path(label_file).unlink(missing_ok=True)
     else:
         if verbose:
             print(f"All label files are newer than {filename.name}. Nothing to do.")
