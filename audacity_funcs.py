@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 
-import glob
 import json
 import re
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Generator, Iterable, List, Optional
 
 import pyaudacity as pa
 import pyperclip
@@ -188,7 +187,7 @@ def select_first_audio_track():
     pa.do(f"SelectTracks: Track={first_audio_track} Mode={SELECT_MODE_SET}")
 
 
-def make_label_track_from_file(label_file: str, label_track_name: str = None):
+def make_label_track_from_file(label_file: Path, label_track_name: str = None):
     """
     Makes a new label track from the given file and names the label track according to the given name.
     """
@@ -196,9 +195,9 @@ def make_label_track_from_file(label_file: str, label_track_name: str = None):
     label_track_name = (
         label_track_name
         if label_track_name
-        else re.sub(r"_?label_?", "", Path(label_file).stem)
+        else re.sub(r"_?label_?", "", label_file.stem)
     )
-    abs_path = Path(label_file).expanduser().resolve()
+    abs_path = label_file.expanduser().resolve()
 
     with save_selection():
         select_first_audio_track()  # needed for nyquist
@@ -208,7 +207,7 @@ def make_label_track_from_file(label_file: str, label_track_name: str = None):
         pa.do(f'SetTrack: Name="{label_track_name}"')
 
 
-def make_label_track_01(label_file: str, label_track_name: str):
+def make_label_track_01(label_file: Path, label_track_name: str):
     """
     Makes a new label track from the given file and names the label track according to the given name.
     Uses an unreliable way, hence use not recommended, but might inspire ideas for other funcs.
@@ -217,7 +216,7 @@ def make_label_track_01(label_file: str, label_track_name: str):
     pa.do(f'SetTrack: Name="{label_track_name}"')
     count = 1
     with save_clipboard:
-        with open(label_file) as f:
+        with label_file.open() as f:
             for line in f:
                 s_e_l = line.strip().split("\t")
                 pa.do(
@@ -672,41 +671,40 @@ def export_selected_or_all_label_tracks():
     export_labels_list(label_track_indices)
 
 
-def import_audio(filename: str):
+def import_audio(filename: Path):
     """
     Imports audio into Audacity.
     """
-    abs_path = Path(filename).expanduser().resolve()
+    abs_path = filename.expanduser().resolve()
     pa.import_audio(abs_path)
 
 
-def open_project(filename: str):
+def open_project(filename: Path):
     """
     Opens the Audacity project given by filename.
     """
-    abs_path = Path(filename).expanduser().resolve()
+    abs_path = filename.expanduser().resolve()
     pa.do(f'OpenProject2: Filename="{abs_path}"')
 
 
-def is_audacity_project(filename: str) -> bool:
+def is_audacity_project(filename: Path) -> bool:
     """
     Returns true if the given filename represents an audacity project.
     Tested
     """
-    return filename.lower().endswith(f".{AUDACITY_EXTENSION}")
+    return filename.name.lower().endswith(f".{AUDACITY_EXTENSION}")
 
 
-def create_labels_glob(filename: str) -> List[str]:
+def create_labels_glob(filename: Path) -> Generator[Path]:
     """
     Finds all label files associated with the audio
     file give by name.
     """
-    abs_path = Path(filename).expanduser().resolve()
-    dirname = abs_path.parent
-    return glob.glob(f"{dirname}/*_{abs_path.stem}.txt")
+    abs_path = filename.expanduser().resolve()
+    return abs_path.parent.glob(f"*_{abs_path.stem}.txt")
 
 
-def reorder_labels(filenames: List[str]) -> List[str]:
+def reorder_labels(paths: Iterable[Path]) -> List[Path]:
     """
     Reorders given label files by this order:
        1. part
@@ -719,16 +717,16 @@ def reorder_labels(filenames: List[str]) -> List[str]:
        6. beat (last)
     """
 
-    def get_priority(identifier):
+    def get_priority(path: Path):
         # Recognized labels first
         for i, substring in enumerate(LABEL_PRIORITY_ORDER):
-            if substring in identifier:
+            if substring in path.name:
                 return i
         # bar before beat
-        if LABEL_BAR in identifier:
+        if LABEL_BAR in path.name:
             return len(LABEL_PRIORITY_ORDER) + 1  # bar come just before beat
         # beat come last
-        if LABEL_BEAT in identifier:
+        if LABEL_BEAT in path.name:
             return len(LABEL_PRIORITY_ORDER) + 2  # beat come after bar
         # Unrecognized labels come just before bars and beat
         return len(
@@ -736,10 +734,10 @@ def reorder_labels(filenames: List[str]) -> List[str]:
         )  # Unrecognized labels go between recognized and bar/beat
 
     # Sort filenames using the modified priority
-    return sorted(filenames, key=get_priority)
+    return sorted(paths, key=get_priority)
 
 
-def open_audio(filename: str, verbose=False):
+def open_audio(filename: Path, verbose=False):
     """
     Opens the audio file given by name.
     If it's an audacity project, simply opens it.
@@ -758,10 +756,10 @@ def open_audio(filename: str, verbose=False):
         import_audio(filename)
         if verbose:
             print(f'Done importing "{filename}"')
-        abs_path = Path(filename).expanduser().resolve()
+        abs_path = filename.expanduser().resolve()
         label_files = reorder_labels(create_labels_glob(filename))
         for lfile in label_files:
-            lblname = Path(lfile).stem.replace(f"_{abs_path.stem}", "")
+            lblname = lfile.stem.replace(f"_{abs_path.stem}", "")
             if verbose:
                 print(f"labels: >{lblname}<")
             make_label_track_from_file(lfile, lblname)

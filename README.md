@@ -3,6 +3,7 @@
 rebuildap: rebuild [Audacity](https://www.audacityteam.org/) Project
 
 ## Purpose
+
 Audacity aup3 files are huge. If you want to maintain them in a repository, every change
 to your labels will generate a new version of the binary aup3 file.
 
@@ -29,7 +30,7 @@ When providing an audio file (mp3, wav, anything Audacity can import) for the
 `filename` argument, that file is imported into Audacity along with label files
 that might be lying next to it, conforming to the following naming convention:
 Stem of the input file name with `.txt` appended and anything prepended ending
-in `_` is considered a label file.  E.g. with this input audio file
+in `_` is considered a label file. E.g. with this input audio file
 `mysong.mp3` all files `*_mysong.txt` are considered related label files.
 
 When providing an aup3 file, its label tracks are exported individually.
@@ -43,8 +44,10 @@ command [ExportLabels](https://manual.audacityteam.org/man/scripting_reference.h
 fails to offer a non-interactive mode.
 
 ## Recommendation
+
 In order to consistently prevent git from tracking Audacity files, add these lines to
 the `.gitignore` file of your project:
+
 ```
 *.aup3
 *.aup3-shm
@@ -52,6 +55,7 @@ the `.gitignore` file of your project:
 ```
 
 ## Prerequisites
+
 - macOS. (Windows and Linux are not yet supported)
 - You need [Audacity](https://www.audacityteam.org/)
 - Enable Preferences>Modules>mod-script-pipe [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
@@ -66,14 +70,17 @@ the `.gitignore` file of your project:
 - [uv](https://docs.astral.sh/uv/)
 
 ## Install
+
 ```console
 cd <project_root>
 ./mkdist.py
 ```
+
 This uses [uv](https://docs.astral.sh/uv/) to create a wheel file in the `dist/` directory
 and subsequently installs it such that rebuildap is globally available on your machine.
 
 ## TODO
+
 - allow additional audio tracks
 - write a text file with the used sources to reconstruct the aup3.
   Allow also this file as input to the script, which then will
@@ -83,12 +90,8 @@ and subsequently installs it such that rebuildap is globally available on your m
 - add support for "dependencies": Only recreate the
   aup3 file if any of the labels or the audio are
   newer than the aup3.
-- add functionality to check whether the label tracks in the aup3 are newer than the exported label files.
-  If so, compare whether the label tracks have additional / corrected info. If so, update the label files.
-    1. check the aup3 file date against every label file date. For every label file that is older than the aup3 file,
-       check whether the label track in the aup3 file has additional/changed labels. If so, perform a diff between
-       the checked in label file and the label track in the aup3 file and let the user decide whether to
-       update the label file, giving instructions how to commit changes.
+- check functionality:
+  give instructions how to commit changes.
 - write instructions for:
     - replacing label track
     - replacing audio track
@@ -98,30 +101,46 @@ and subsequently installs it such that rebuildap is globally available on your m
 - add command line option to ignore certain labels.
 
 ## Contribute
+
 ```console
 git clone https://github.com/bwagner/rebuildap
 cd rebuildap
 pre-commit install
 ```
+
 if `pre-commit install` fails, issue `pip install pre-commit` (see [pre-commit](https://pre-commit.com/))
 
+In addition, configure [git-lfs locks](https://github.com/git-lfs/git-lfs/wiki/File-Locking) to prevent concurrent
+modifications of binary files:
+
+```console
+cd rebuildap  # (if not already there)
+git config lfs.locksverify true
+```
+
 ## Comments
+
 Audacity doesn't support exporting label tracks selectively: When exporting via File>Export Other>Export Labels..,
 all labels get thrown together into the same file.
-There's a [workaround](https://forum.audacityteam.org/t/export-individual-label-when-multiple-labels-in-project/58799/32),
-however, GetInfo unfortunately exports labels with [limited precision](https://github.com/audacity/audacity/issues/4220).
-Thus, when exporting labels, we temporarily delete all but one label track at a time, export that track, undo the deletion,
+There's
+a [workaround](https://forum.audacityteam.org/t/export-individual-label-when-multiple-labels-in-project/58799/32),
+however, GetInfo unfortunately exports labels
+with [limited precision](https://github.com/audacity/audacity/issues/4220).
+Thus, when exporting labels, we temporarily delete all but one label track at a time, export that track, undo the
+deletion,
 etc.
 
 ## See also
+
 [shift_labels](https://github.com/bwagner/shift_labels), [quantize_labels](https://github.com/bwagner/quantize_labels), [beats2bars](https://github.com/bwagner/beats2bars), [pyaudacity](https://github.com/bwagner/pyaudacity)
 
-
 ## Links
+
 - [Audacity and Nyquist](https://www.audacity-forum.de/download/edgar/nyquist/nyquist-doc/devel/audacity-nyquist-en.htm)
 - [AudioNyq](https://audionyq.com/)
 - [Audacity Scripting Reference](https://manual.audacityteam.org/man/scripting_reference.html)
 - [Typer](https://typer.tiangolo.com/tutorial/)
 
 ## Thank You
+
 - [Steve Daulton](https://github.com/SteveDaulton) for the Nyquist-Script

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import random
 import time
+from pathlib import Path
 
 import pyaudacity as pa
 import pytest
@@ -225,7 +226,6 @@ def test_unsolo_tracks(four_tracks):
 
 
 def test_get_solo_track_indices(four_tracks):
-    af
     tracks = [1, 3]
     af.solo_tracks(tracks)
     assert af.get_solo_track_indices() == tracks
@@ -285,54 +285,75 @@ def test_focus_track2(four_tracks):
     assert af.get_track_name(af.get_focused_tracks()[0]) == LABEL_TRACK_2_NAME
 
 
-# Test cases using pytest's parametrize
+def map_strings(obj, func):
+    """
+    Recursively traverse any nested structure (lists, tuples, dicts, sets)
+    and apply `func` to every string encountered, reproducing the structure.
+    """
+    if isinstance(obj, str):
+        return func(obj)
+    elif isinstance(obj, dict):
+        return {map_strings(k, func): map_strings(v, func) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [map_strings(item, func) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(map_strings(item, func) for item in obj)
+    elif isinstance(obj, set):
+        return {map_strings(item, func) for item in obj}
+    else:
+        return obj
+
+
 @pytest.mark.parametrize(
     "identifiers, expected",
-    [
-        # Test case 1: Basic ordering with one match per identifier
-        (
-            ["part_001", "chord_A", "lyrics_01", "bar_10", "beat_100"],
-            ["part_001", "chord_A", "lyrics_01", "bar_10", "beat_100"],
-        ),
-        # Test case 2: No matches, so unrecognized items go before bars and beats
-        (
-            ["alpha", "beta", "gamma", "bar_10", "beat_100"],
-            ["alpha", "beta", "gamma", "bar_10", "beat_100"],
-        ),
-        # Test case 3: Bars and beats should always be at the end, even if others are recognized
-        (
-            ["chord_A", "lyrics_01", "random", "beat_100", "bar_10"],
-            ["chord_A", "lyrics_01", "random", "bar_10", "beat_100"],
-        ),
-        # Test case 4: Bars and beats should still be ordered at the end with unrecognized before them
-        (
-            ["part_001", "random_label", "beat_100", "bar_10"],
-            ["part_001", "random_label", "bar_10", "beat_100"],
-        ),
-        # Test case 5: No recognized labels, but bars and beats should still be at the end
-        (
-            ["random_01", "random_02", "bar_10", "beat_100"],
-            ["random_01", "random_02", "bar_10", "beat_100"],
-        ),
-        # Test case 6: Only bars and beats should be sorted properly
-        (["beat_100", "bar_10"], ["bar_10", "beat_100"]),
-        # Test case 7: Mixed ordering with recognized and unrecognized labels
-        (
-            ["beat_100", "part_002", "chord_B", "random_label", "bar_10"],
-            ["part_002", "chord_B", "random_label", "bar_10", "beat_100"],
-        ),
-    ],
+    map_strings(
+        [
+            # Test case 1: Basic ordering with one match per identifier
+            (
+                ["part_001", "chord_A", "lyrics_01", "bar_10", "beat_100"],
+                ["part_001", "chord_A", "lyrics_01", "bar_10", "beat_100"],
+            ),
+            # Test case 2: No matches, so unrecognized items go before bars and beats
+            (
+                ["alpha", "beta", "gamma", "bar_10", "beat_100"],
+                ["alpha", "beta", "gamma", "bar_10", "beat_100"],
+            ),
+            # Test case 3: Bars and beats should always be at the end, even if others are recognized
+            (
+                ["chord_A", "lyrics_01", "random", "beat_100", "bar_10"],
+                ["chord_A", "lyrics_01", "random", "bar_10", "beat_100"],
+            ),
+            # Test case 4: Bars and beats should still be ordered at the end with unrecognized before them
+            (
+                ["part_001", "random_label", "beat_100", "bar_10"],
+                ["part_001", "random_label", "bar_10", "beat_100"],
+            ),
+            # Test case 5: No recognized labels, but bars and beats should still be at the end
+            (
+                ["random_01", "random_02", "bar_10", "beat_100"],
+                ["random_01", "random_02", "bar_10", "beat_100"],
+            ),
+            # Test case 6: Only bars and beats should be sorted properly
+            (["beat_100", "bar_10"], ["bar_10", "beat_100"]),
+            # Test case 7: Mixed ordering with recognized and unrecognized labels
+            (
+                ["beat_100", "part_002", "chord_B", "random_label", "bar_10"],
+                ["part_002", "chord_B", "random_label", "bar_10", "beat_100"],
+            ),
+        ],
+        Path,
+    ),
 )
 def test_reorder_labels(identifiers, expected):
     assert af.reorder_labels(identifiers) == expected
 
 
 def test_is_audacity_project():
-    assert af.is_audacity_project("bla.aup3")
+    assert af.is_audacity_project(Path("bla.aup3"))
 
 
 def test_is_not_audacity_project():
-    assert not af.is_audacity_project("bla.mp3")
+    assert not af.is_audacity_project(Path("bla.mp3"))
 
 
 def test_focus(four_tracks):

@@ -48,7 +48,7 @@ def process_lines(lines):
     return result
 
 
-def check_label_age(filename, verbose):
+def check_label_age(filename: str, verbose):
     """
     Check whether the audacity file is newer than the label files.
     Export those label tracks whose corresponding label files are older than the audacity file
@@ -64,83 +64,76 @@ def check_label_age(filename, verbose):
             f"Check whether audacity file newer than label files. ({filename or 'current dir'})"
         )
         # check whether multiple audacity files in current directory
-    if not filename:
-        audacity_files = list(Path.cwd().glob(f"*.{af.AUDACITY_EXTENSION}"))
-        if len(audacity_files) > 1:
+    if filename:
+        filename = Path(filename)
+    else:
+        audacity_files = Path.cwd().glob(f"*.{af.AUDACITY_EXTENSION}")
+        try:
+            first = next(audacity_files)
+        except StopIteration:
+            print("No audacity files found in current directory.")
+            return
+        try:
+            next(audacity_files)
             print(
                 "Multiple audacity files found in current directory. Please specify a filename."
             )
             return
-        elif len(audacity_files) == 0:
-            print("No audacity files found in current directory.")
-            return
-        filename = str(audacity_files[0])
-    filename = Path(filename)
+        except StopIteration:
+            pass
+
+        filename = first
+
     if verbose:
         print(f"Checking whether {filename.name} newer than label files.")
-    label_files = af.reorder_labels(
-        af.create_labels_glob(str(filename))
-    )  # TODO: make these Paths instead of strs
+    label_files = af.reorder_labels(af.create_labels_glob(filename))
     audacity_file_mtime = filename.stat().st_mtime
     outdated_candidates = [
         Path(label_file)
         for label_file in label_files
-        if Path(label_file).stat().st_mtime < audacity_file_mtime
+        if label_file.stat().st_mtime < audacity_file_mtime
     ]
-    # once label_file is Path instead of str, remove this ctor Path(label_file)
 
     if outdated_candidates:
         # export all label tracks and compare their contents with their corresponding label files.
         # TODO: export only the label tracks that are older than the audacity file
         ap.assert_audacity(verbose)
-        af.open_audio(str(filename), verbose)
+        af.open_audio(filename, verbose)
         af.export_label_tracks()
         af.close_project()
-        # NOTE: these files are typically named "chords.txt", not "chords_songname.txt"
-
-        dismissed_labels = []
+        # NOTE: these files are typically named "chords.txt", not "chords_song.txt"
 
         for label_file in outdated_candidates:
             exported_label_name = (
-                Path(label_file.name).stem.replace(f"_{Path(filename.name).stem}", "")
-                + Path(label_file.name).suffix
+                label_file.stem.replace(f"_{Path(filename.name).stem}", "")
+                + label_file.suffix
             )
             if verbose:
                 print(f"{label_file.name} is older than {filename.name}")
-                labels_from_file = process_lines(
-                    label_file.read_text().splitlines(keepends=True)
+            labels_from_file = process_lines(
+                label_file.read_text().splitlines(keepends=True)
+            )
+            labels_from_proj = process_lines(
+                Path(exported_label_name).read_text().splitlines(keepends=True)
+            )
+            sm = difflib.unified_diff(
+                labels_from_file,
+                labels_from_proj,
+                fromfile=str(label_file),
+                tofile=f"exported label file {exported_label_name}",
+            )
+            if any(sm):
+                print(
+                    f"Label file {label_file.name} differs from exported label file {exported_label_name}:"
                 )
-                labels_from_proj = process_lines(
-                    Path(exported_label_name).read_text().splitlines(keepends=True)
-                )
-                sm = difflib.unified_diff(
-                    labels_from_file,
-                    labels_from_proj,
-                    fromfile=str(label_file),
-                    tofile=f"exported label file {exported_label_name}",
-                )
-                if any(sm):
-                    print(
-                        f"Label file {label_file.name} differs from exported label file {exported_label_name}:"
-                    )
-                    print("".join(sm))
-                else:
-                    print(
-                        f"Label file {label_file.name} and exported label file {exported_label_name} are identical."
-                    )
-                    dismissed_labels.append(exported_label_name)
+                print("".join(sm))
             else:
-                if verbose:
-                    print(
-                        f"{label_file.name} is newer than {filename.name} (nothing to do)"
-                    )
-                    dismissed_labels.append(exported_label_name)
+                print(
+                    f"Label file {label_file.name} and exported label file {exported_label_name} are identical."
+                    f"Deleting {exported_label_name}."
+                )
+                Path(exported_label_name).unlink(missing_ok=True)
 
-        # delete the exported label files that are identical to the label files
-        for label_file in dismissed_labels:
-            if verbose:
-                print(f"Deleting exported label file {label_file}")
-            Path(label_file).unlink(missing_ok=True)
     else:
         if verbose:
             print(f"All label files are newer than {filename.name}. Nothing to do.")
@@ -187,6 +180,7 @@ def rebuild(
     if check:
         check_label_age(filename, verbose)
     elif filename:
+        filename = Path(filename)
         if label:
             if verbose:
                 print("importing label into open audacity project.")
