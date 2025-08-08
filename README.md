@@ -54,6 +54,15 @@ the `.gitignore` file of your project:
 *.aup3-wal
 ```
 
+In addition, every contributor to your project should
+configure [git-lfs locks](https://github.com/git-lfs/git-lfs/wiki/File-Locking) to prevent concurrent
+modifications of binary files:
+```console
+cd your_dir_containing_audio_labels_and_aup3_files
+git config lfs.locksverify true
+```
+
+
 ## Prerequisites
 
 - macOS. (Windows and Linux are not yet supported)
@@ -87,16 +96,13 @@ and subsequently installs it such that rebuildap is globally available on your m
   sheepishly import the files mentioned (instead of being smart)
 - more tests
 - Currently only macOS, no Windows/Linux
-- add support for "dependencies": Only recreate the
-  aup3 file if any of the labels or the audio are
-  newer than the aup3.
-- check functionality:
-  give instructions how to commit changes.
 - write instructions for:
     - replacing label track
     - replacing audio track
     - adding new label track
     - removing label track
+- Explore Nyquist scripting capabilities to
+  - export label tracks in a non-interactive way
 - add command line option to ignore all labels.
 - add command line option to ignore certain labels.
 
@@ -109,14 +115,6 @@ pre-commit install
 ```
 
 if `pre-commit install` fails, issue `pip install pre-commit` (see [pre-commit](https://pre-commit.com/))
-
-In addition, configure [git-lfs locks](https://github.com/git-lfs/git-lfs/wiki/File-Locking) to prevent concurrent
-modifications of binary files:
-
-```console
-cd rebuildap  # (if not already there)
-git config lfs.locksverify true
-```
 
 ## Comments
 
