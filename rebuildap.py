@@ -116,13 +116,15 @@ def check_label_age(filename: str, verbose):
             labels_from_proj = process_lines(
                 Path(exported_label_name).read_text().splitlines(keepends=True)
             )
-            sm = difflib.unified_diff(
-                labels_from_file,
-                labels_from_proj,
-                fromfile=str(label_file),
-                tofile=f"exported label file {exported_label_name}",
+            sm = list(
+                difflib.unified_diff(
+                    labels_from_file,
+                    labels_from_proj,
+                    label_file.name,
+                    f"Audacity-label track: {exported_label_name}",
+                )
             )
-            if any(sm):
+            if sm:
                 print(
                     f"Label file {label_file.name} differs from exported label file {exported_label_name}:"
                 )
