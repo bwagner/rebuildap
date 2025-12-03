@@ -130,7 +130,7 @@ etc.
 
 ## See also
 
-[shift_labels](https://github.com/bwagner/shift_labels), [quantize_labels](https://github.com/bwagner/quantize_labels), [beats2bars](https://github.com/bwagner/beats2bars),  [audacity_legatize](https://github.com/bwagner/audacity_legatize), [pyaudacity](https://github.com/bwagner/pyaudacity)
+[audacity_click_label](https://github.com/bwagner/audacity_click_label), [shift_labels](https://github.com/bwagner/shift_labels), [quantize_labels](https://github.com/bwagner/quantize_labels), [beats2bars](https://github.com/bwagner/beats2bars),  [audacity_legatize](https://github.com/bwagner/audacity_legatize), [pyaudacity](https://github.com/bwagner/pyaudacity)
 
 ## Links
 
