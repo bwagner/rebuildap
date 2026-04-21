@@ -78,9 +78,6 @@ git config lfs.locksverify true
   Audacity: Tools> Nyquist Plugin Installer> navigate to `ImportLabels.ny`
     - Press Apply
     - Restart Audacity
-- Install pyaudacity from fork:
-  `pip install git+https://github.com/bwagner/pyaudacity`
-- `pip install psutil`
 - [uv](https://docs.astral.sh/uv/)
 
 ## Install
@@ -146,7 +143,8 @@ manually-placed sub-beat label `C7#9`):
 **6 decimals**. Maximum rounding error: ~0.5 ms, i.e. ~22 samples @ 44.1 kHz —
 inaudible but not sample-accurate.
 
-For beat-quantized labels (the common case, e.g. output of `DBNDownBeatTracker`
+For beat-quantized labels (the common case, e.g. output of
+[`DBNDownBeatTracker`](https://github.com/CPJKU/madmom/blob/main/bin/DBNDownBeatTracker)
 rounded to 2 decimals) both paths yield identical files.
 
 `rebuildap` uses the non-interactive `GetInfo` path by default. Pass `-p` /
@@ -210,7 +208,6 @@ should be reported upstream. But together they're sufficient to run
 - [Audacity and Nyquist](https://www.audacity-forum.de/download/edgar/nyquist/nyquist-doc/devel/audacity-nyquist-en.htm)
 - [AudioNyq](https://audionyq.com/)
 - [Audacity Scripting Reference](https://manual.audacityteam.org/man/scripting_reference.html)
-- [Typer](https://typer.tiangolo.com/tutorial/)
 
 ## Thank You
 
