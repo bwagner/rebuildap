@@ -1,13 +1,96 @@
 #!/usr/bin/env python
 
 import json
+import os
 import re
+import sys
+import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Generator, Iterable, List, Optional
 
 import pyaudacity as pa
 import pyperclip
+
+
+def _pa_do_timed(command: str, timeout: float) -> str:
+    """Run ``pa.do(command)`` in a daemon thread with a hard timeout.
+
+    Raises ``TimeoutError`` if ``pa.do`` does not return within ``timeout``
+    seconds. ``pa.do`` blocks on FIFO open when Audacity's mod-script-pipe
+    is wedged, and stays blocked for any pending response; a plain
+    ``try/except`` cannot bound it.
+    """
+    result: dict = {"resp": None, "err": None}
+
+    def worker():
+        try:
+            result["resp"] = pa.do(command)
+        except Exception as e:  # noqa: BLE001 — propagate any exception via result
+            result["err"] = e
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f"pa.do({command[:60]!r}) did not return within {timeout}s")
+    if result["err"] is not None:
+        raise result["err"]
+    return result["resp"]
+
+
+def _drain_read_pipe() -> bytes:
+    """Non-blocking read-and-discard of any bytes pending in the from-Audacity FIFO.
+
+    Stale bytes can linger after a ``_pa_do_timed`` timeout where the leaked
+    daemon thread held the read pipe open — Audacity eventually writes the
+    response, and those bytes sit in the kernel FIFO buffer, poisoning the
+    next caller. Calling this before a fresh round-trip clears the slate.
+    Returns whatever was drained so callers can log it.
+    """
+    path = f"/tmp/audacity_script_pipe.from.{os.getuid()}"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return b""
+    chunks = []
+    try:
+        while True:
+            try:
+                chunk = os.read(fd, 4096)
+            except BlockingIOError:
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+    return b"".join(chunks)
+
+
+def ping_pipe(timeout: float = 3.0) -> None:
+    """Cheap end-to-end no-op round-trip to confirm mod-script-pipe is responsive.
+
+    Drains any stale bytes first (from a previously timed-out response),
+    then sends ``GetInfo: Type=Tracks`` — returns quickly on a healthy pipe
+    and has no side effects. Use before issuing expensive or state-changing
+    commands (``OpenProject2``, ``Close:``, ``ExportLabels:``) so we fail
+    fast on a wedged pipe rather than burning each command's full timeout.
+
+    Raises ``TimeoutError`` if Audacity doesn't reply within ``timeout``.
+    """
+    drained = _drain_read_pipe()
+    if drained:
+        preview = drained[:200].decode("utf-8", errors="replace")
+        if len(drained) > 200:
+            preview += "..."
+        print(
+            f"[pipe drain] discarded {len(drained)} stale bytes: {preview!r}",
+            file=sys.stderr,
+        )
+    _pa_do_timed("GetInfo: Type=Tracks", timeout=timeout)
+
 
 """
 audacity_funcs.py
@@ -748,9 +831,11 @@ def get_label_tracks_content_via_getinfo() -> Dict[str, str]:
     Useful for comparing against on-disk versioned label files without the
     side-effect of overwriting them.
     """
-    labels_by_idx = _parse_labels_response(pa.do("GetInfo: Type=Labels"))
+    labels_by_idx = _parse_labels_response(
+        _pa_do_timed("GetInfo: Type=Labels", timeout=5.0)
+    )
     names_by_idx = _label_track_names_by_idx(
-        _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
+        _parse_tracks_response(_pa_do_timed("GetInfo: Type=Tracks", timeout=3.0))
     )
     return {
         names_by_idx[idx]: _format_track_txt(labels)
@@ -804,12 +889,34 @@ def import_audio(filename: Path):
     pa.import_audio(abs_path)
 
 
-def open_project(filename: Path):
+def open_project(
+    filename: Path,
+    retries: int = 1,
+    retry_delay: float = 0.3,
+    per_attempt_timeout: float = 5.0,
+):
     """
     Opens the Audacity project given by filename.
+
+    One retry on ``BatchCommand finished: Failed!`` (recently-closed project
+    still mid-unload). Bails immediately on ``TimeoutError`` since a wedged
+    pipe won't recover from retrying.
     """
     abs_path = filename.expanduser().resolve()
-    pa.do(f'OpenProject2: Filename="{abs_path}"')
+    cmd = f'OpenProject2: Filename="{abs_path}"'
+    # No-op ping first — fail fast if pipe is wedged, rather than waiting out
+    # the per-attempt timeout on an expensive command that would modify state.
+    ping_pipe()
+    last_err: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            _pa_do_timed(cmd, per_attempt_timeout)
+            return
+        except pa.PyAudacityException as e:
+            last_err = e
+            if attempt < retries:
+                time.sleep(retry_delay)
+    raise last_err
 
 
 def is_audacity_project(filename: Path) -> bool:

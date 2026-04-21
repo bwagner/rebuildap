@@ -159,6 +159,43 @@ was investigated and rejected: Nyquist-side label access also goes through
 so a custom Nyquist plug-in would have the **same 3-decimal precision floor**
 as our direct `GetInfo` path — no advantage.
 
+### Audacity cold-start race
+
+Running `rebuildap -c` across many projects uncovered an Audacity crash when
+commands reached a freshly-started instance too quickly. Crash signature:
+
+- `EXC_BAD_ACCESS / KERN_INVALID_ADDRESS` at address `0x220` (near-null pointer deref)
+- Faulting module: `lib-menus.dylib`
+- Process uptime at crash: **~5 seconds**
+- `mod-script-pipe.so` was delivering a `Close:` command at crash time
+
+Audacity's mod-script-pipe becomes available **earlier** than the menu
+subsystem. If a command that routes through menus (notably `Close:`)
+arrives during that window, the menu dispatcher dereferences a
+not-yet-initialized pointer and Audacity crashes.
+
+**Workarounds:**
+
+1. **Readiness probe** (`audacity_present.wait_for_audacity_ready`): after
+   starting or detecting Audacity, probe `GetInfo: Type=Tracks` — a
+   pipe-only query that does not touch menus — with exponential backoff
+   until it responds. If the probe needed retries (a proxy for cold
+   start), add a short settling delay before returning so menu init can
+   finish. Eliminates the cold-start (~5 s uptime) crash.
+
+2. **Close via AppleScript Cmd-W instead of `Close:`** (check_label_age
+   uses `audacity_present.close_audacity_window_as`). Repeated
+   `pa.do("Close:")` cycles across many projects eventually hit the same
+   menu-dispatch null-deref even on a "warm" Audacity (observed: uptime
+   ~327 s after a handful of open/close cycles). Sending Cmd-W via
+   AppleScript routes the window close through AppKit's event dispatch
+   rather than the scripting pipe's menu-command path, sidestepping the
+   buggy path.
+
+These are workarounds, not fixes — the underlying bug is in Audacity and
+should be reported upstream. But together they're sufficient to run
+`rebuildap` across many projects without crashes.
+
 ## See also
 
 - [audacity_click_label](https://github.com/bwagner/audacity_click_label)

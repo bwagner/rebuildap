@@ -111,7 +111,12 @@ def check_label_age(filename: str, verbose, precise=False):
     else:
         _check_label_age_via_getinfo(filename, outdated_candidates)
 
-    af.close_project()
+    # Close via AppleScript Cmd-W rather than pa.do("Close:") — avoids the
+    # mod-script-pipe → lib-menus.dylib crash path that bites after a few
+    # open/close cycles (see README > Comments > Audacity cold-start race).
+    # open_project() retries on failure, so we don't wait here for the close
+    # to complete.
+    ap.close_audacity_window_as()
 
 
 def _check_label_age_precise(filename, outdated_candidates):
