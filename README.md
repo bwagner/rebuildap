@@ -12,18 +12,19 @@ keeping track of the (rarely changing) original audio source material and the (m
 textual label files.
 
 ```console
- Usage: rebuildap.py [OPTIONS] [FILENAME]
+usage: rebuildap [-h] [-v] [-l] [-c] [filename]
 
-╭─ Arguments ──────────────────────────────────────────────────────────────────╮
-│   filename      [FILENAME]  The audio file name. [default: None]             │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --verbose  -v        Enable verbose mode.                                    │
-│ --label    -l        Import label file.                                      │
-│ --check    -c        Check whether audacity file newer than label files and  │
-│                      show differences.                                       │
-│ --help               Show this message and exit.                             │
-╰──────────────────────────────────────────────────────────────────────────────╯
+rebuild Audacity project
+
+positional arguments:
+  filename       The audio file name.
+
+options:
+  -h, --help     show this help message and exit
+  -v, --verbose  Enable verbose mode.
+  -l, --label    Import label file.
+  -c, --check    Check whether audacity file newer than label files and show
+                 differences.
 ```
 
 When providing an audio file (mp3, wav, anything Audacity can import) for the

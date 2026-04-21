@@ -1,10 +1,8 @@
 #!/usr/bin/env python
+import argparse
 import difflib
 import re
 from pathlib import Path
-from typing import Annotated
-
-import typer
 
 from . import audacity_funcs as af
 from . import audacity_present as ap
@@ -162,23 +160,7 @@ def prerequisites_met(verbose: bool) -> bool:
     return True
 
 
-def rebuild(
-    filename: Annotated[str, typer.Argument(..., help="The audio file name.")] = None,
-    verbose: Annotated[
-        bool, typer.Option("-v", "--verbose", help="Enable verbose mode.")
-    ] = False,
-    label: Annotated[
-        bool, typer.Option("-l", "--label", help="Import label file.")
-    ] = False,
-    check: Annotated[
-        bool,
-        typer.Option(
-            "-c",
-            "--check",
-            help="Check whether audacity file newer than label files and show differences.",
-        ),
-    ] = False,
-):
+def rebuild(filename=None, verbose=False, label=False, check=False):
     if check:
         check_label_age(filename, verbose)
     elif filename:
@@ -214,20 +196,21 @@ def rebuild(
             af.export_label_tracks()
 
 
-def custom_help_check() -> None:
-    """
-    Adds command line options -h and -? in addition to the default --help to
-    show help output.
-    """
-    import sys
-
-    if "-h" in sys.argv or "-?" in sys.argv:
-        sys.argv[1] = "--help"
-
-
 def main():
-    custom_help_check()
-    typer.run(rebuild)
+    parser = argparse.ArgumentParser(description="rebuild Audacity project")
+    parser.add_argument("filename", nargs="?", help="The audio file name.")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Enable verbose mode."
+    )
+    parser.add_argument("-l", "--label", action="store_true", help="Import label file.")
+    parser.add_argument(
+        "-c",
+        "--check",
+        action="store_true",
+        help="Check whether audacity file newer than label files and show differences.",
+    )
+    args = parser.parse_args()
+    rebuild(args.filename, args.verbose, args.label, args.check)
 
 
 if __name__ == "__main__":

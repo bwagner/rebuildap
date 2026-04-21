@@ -8,7 +8,6 @@ from typing import Dict, Generator, Iterable, List, Optional
 
 import pyaudacity as pa
 import pyperclip
-import typer
 
 """
 audacity_funcs.py
@@ -770,4 +769,4 @@ def main():
 
 
 if __name__ == "__main__":
-    typer.run(main)
+    main()

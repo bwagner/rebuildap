@@ -5,7 +5,6 @@ import subprocess
 import time
 
 import psutil
-import typer
 
 from . import audacity_funcs as af
 
@@ -117,4 +116,4 @@ def main():
 
 
 if __name__ == "__main__":
-    typer.run(main)
+    main()

@@ -19,7 +19,6 @@ classifiers = [
 dependencies = [
     "pyperclip",
     "psutil",
-    "typer",
     "pyaudacity @ git+https://github.com/bwagner/pyaudacity.git",
 ]
 
