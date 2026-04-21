@@ -35,8 +35,8 @@ dev = [
 [tool.uv.build-backend]
 module-root = ""
 
-[tool.isort]
-profile = 'black'
+[tool.ruff.lint]
+extend-select = ["I"]
 
 [project.scripts]
 rebuildap = "rebuildap:main"
