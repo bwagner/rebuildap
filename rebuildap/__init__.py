@@ -2,11 +2,13 @@
 import argparse
 import difflib
 import re
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 from . import audacity_funcs as af
 from . import audacity_present as ap
 from .utils import cut_trailing_zeros
+from .version_info import get_version_info
 
 """
 rebuildap.py song.mp3
@@ -208,6 +210,12 @@ def main():
         "--check",
         action="store_true",
         help="Check whether audacity file newer than label files and show differences.",
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=get_version_info(_pkg_version("rebuildap")),
     )
     args = parser.parse_args()
     rebuild(args.filename, args.verbose, args.label, args.check)

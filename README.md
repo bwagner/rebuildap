@@ -12,7 +12,7 @@ keeping track of the (rarely changing) original audio source material and the (m
 textual label files.
 
 ```console
-usage: rebuildap [-h] [-v] [-l] [-c] [filename]
+usage: rebuildap [-h] [-v] [-l] [-c] [-V] [filename]
 
 rebuild Audacity project
 
@@ -25,6 +25,7 @@ options:
   -l, --label    Import label file.
   -c, --check    Check whether audacity file newer than label files and show
                  differences.
+  -V, --version  show program's version number and exit
 ```
 
 When providing an audio file (mp3, wav, anything Audacity can import) for the
