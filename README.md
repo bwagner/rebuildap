@@ -103,8 +103,9 @@ globally available tool. Omit `--reinstall` for the first install.
     - replacing audio track
     - adding new label track
     - removing label track
-- Explore Nyquist scripting capabilities to
-  - export label tracks in a non-interactive way
+- Explore Nyquist scripting capabilities to export label tracks non-interactively
+  *at full precision* (would supersede both the interactive-dialog workaround
+  and the lossy `GetInfo` path).
 - add command line option to ignore all labels.
 - add command line option to ignore certain labels.
 
@@ -120,15 +121,41 @@ if `pre-commit install` fails, issue `pip install pre-commit` (see [pre-commit](
 
 ## Comments
 
-Audacity doesn't support exporting label tracks selectively: When exporting via File>Export Other>Export Labels..,
-all labels get thrown together into the same file.
-There's
-a [workaround](https://forum.audacityteam.org/t/export-individual-label-when-multiple-labels-in-project/58799/32),
-however, GetInfo unfortunately exports labels
-with [limited precision](https://github.com/audacity/audacity/issues/4220).
-Thus, when exporting labels, we temporarily delete all but one label track at a time, export that track, undo the
-deletion,
-etc.
+### Two ways to export label tracks
+
+Audacity doesn't support exporting label tracks selectively: when exporting via
+File > Export Other > Export Labels…, all label tracks get concatenated into a
+single file. There's
+a [workaround](https://forum.audacityteam.org/t/export-individual-label-when-multiple-labels-in-project/58799/32)
+— temporarily remove all but one label track, export, then undo.
+
+The downside of the workaround is that it requires the user to click through
+the save dialog once per label track. Audacity's scripting pipe (`GetInfo:
+Type=Labels`) offers a non-interactive alternative, at the cost of some
+[precision](https://github.com/audacity/audacity/issues/4220).
+
+Empirical comparison (on a project with beat-quantized labels plus one
+manually-placed sub-beat label `C7#9`):
+
+| source                                  | start       | end         |
+|-----------------------------------------|-------------|-------------|
+| interactive `ExportLabels:` (dialog)    | `125.437458`| `126.671804`|
+| `GetInfo: Type=Labels` (non-interactive)| `125.437`   | `126.672`   |
+
+`GetInfo` truncates to **3 decimals** while the interactive export preserves
+**6 decimals**. Maximum rounding error: ~0.5 ms, i.e. ~22 samples @ 44.1 kHz —
+inaudible but not sample-accurate.
+
+For beat-quantized labels (the common case, e.g. output of `DBNDownBeatTracker`
+rounded to 2 decimals) both paths yield identical files.
+
+`rebuildap` uses the non-interactive `GetInfo` path by default. Pass `-p` /
+`--precise` to fall back to the interactive dialog path when exact fidelity on
+sub-beat labels matters.
+
+A third option — a custom [Nyquist](https://manual.audacityteam.org/man/nyquist.html)
+plugin that writes label files directly — could in principle deliver both full
+precision AND non-interactivity, but remains unexplored (see TODO).
 
 ## See also
 
