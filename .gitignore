@@ -6,7 +6,7 @@ __pycache__/
 *.py[cod]
 dist/
 
-.idea/git_toolbox_prj.xml
+.idea/
 
 # User-specific stuff
 .idea/**/workspace.xml
