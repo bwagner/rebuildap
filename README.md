@@ -82,11 +82,11 @@ git config lfs.locksverify true
 
 ```console
 cd <project_root>
-./mkdist.py
+uv tool install --reinstall .
 ```
 
-This uses [uv](https://docs.astral.sh/uv/) to create a wheel file in the `dist/` directory
-and subsequently installs it such that rebuildap is globally available on your machine.
+This uses [uv](https://docs.astral.sh/uv/) to build and install `rebuildap` as a
+globally available tool. Omit `--reinstall` for the first install.
 
 ## TODO
 

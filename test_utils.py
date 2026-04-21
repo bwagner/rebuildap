@@ -10,7 +10,7 @@ express multiple scenarios.
 import pytest
 
 import rebuildap as ra
-from utils import cut_trailing_zeros
+from rebuildap.utils import cut_trailing_zeros
 
 
 def test_process_lines():

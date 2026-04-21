@@ -163,6 +163,7 @@ wheels = [
 
 [[package]]
 name = "rebuildap"
+version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "psutil" },

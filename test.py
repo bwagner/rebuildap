@@ -6,8 +6,8 @@ from pathlib import Path
 import pyaudacity as pa
 import pytest
 
-import audacity_funcs as af
-import audacity_present as ap
+from rebuildap import audacity_funcs as af
+from rebuildap import audacity_present as ap
 
 """
 NOTE: You need to grant PyCharm the right to control your computer

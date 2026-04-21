@@ -1,9 +1,10 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
 
 [project]
 name = "rebuildap"
+version = "0.0.1"
 authors = [
   { name="Bernhard Wagner", email="rebuildap@nosuch.biz" },
 ]
@@ -15,7 +16,6 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
 ]
-dynamic = ["version"]  # this belongs in the [project] section
 dependencies = [
     "pyperclip",
     "psutil",
@@ -32,6 +32,9 @@ dev = [
 "Homepage" = "https://github.com/bwagner/rebuildap"
 "Bug Tracker" = "https://github.com/bwagner/rebuildap/issues"
 
+[tool.uv.build-backend]
+module-root = ""
+
 [tool.isort]
 profile = 'black'
 
@@ -44,15 +47,3 @@ doctest_optionflags = "NORMALIZE_WHITESPACE ELLIPSIS"
 testpaths = [
     "tests",
 ]
-
-[tool.hatch.version]
-path = "__about__.py"
-
-[tool.hatch.metadata]
-allow-direct-references = true  # required for direct reference currency_file
-
-[tool.hatch.build.targets.wheel]
-packages = ["."]
-
-[tool.hatch.build]
-exclude = ["venv/**"]

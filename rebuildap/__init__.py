@@ -6,9 +6,9 @@ from typing import Annotated
 
 import typer
 
-import audacity_funcs as af
-import audacity_present as ap
-from utils import cut_trailing_zeros
+from . import audacity_funcs as af
+from . import audacity_present as ap
+from .utils import cut_trailing_zeros
 
 """
 rebuildap.py song.mp3

@@ -7,7 +7,7 @@ import time
 import psutil
 import typer
 
-import audacity_funcs as af
+from . import audacity_funcs as af
 
 """
 audacity_present.py
