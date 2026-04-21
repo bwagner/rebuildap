@@ -106,9 +106,6 @@ globally available tool. Omit `--reinstall` for the first install.
     - replacing audio track
     - adding new label track
     - removing label track
-- Explore Nyquist scripting capabilities to export label tracks non-interactively
-  *at full precision* (would supersede both the interactive-dialog workaround
-  and the lossy `GetInfo` path).
 - add command line option to ignore all labels.
 - add command line option to ignore certain labels.
 
@@ -156,9 +153,11 @@ rounded to 2 decimals) both paths yield identical files.
 `--precise` to fall back to the interactive dialog path when exact fidelity on
 sub-beat labels matters.
 
-A third option — a custom [Nyquist](https://manual.audacityteam.org/man/nyquist.html)
-plugin that writes label files directly — could in principle deliver both full
-precision AND non-interactivity, but remains unexplored (see TODO).
+A [Nyquist](https://manual.audacityteam.org/man/nyquist.html) plug-in route
+was investigated and rejected: Nyquist-side label access also goes through
+`aud-get-info` (see Steve Daulton's `ExportAllLabelTracks1.ny` for reference),
+so a custom Nyquist plug-in would have the **same 3-decimal precision floor**
+as our direct `GetInfo` path — no advantage.
 
 ## See also
 
