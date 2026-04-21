@@ -10,7 +10,7 @@ authors = [
 description = "rebuild Audacity project"
 readme = "README.md"
 license = { file = "LICENSE.txt"}
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -21,6 +21,10 @@ dependencies = [
     "psutil",
     "typer",
     "pyaudacity @ git+https://github.com/bwagner/pyaudacity.git",
+]
+
+[dependency-groups]
+dev = [
     "pytest>=7.4.4",
 ]
 

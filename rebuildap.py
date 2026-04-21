@@ -2,9 +2,9 @@
 import difflib
 import re
 from pathlib import Path
+from typing import Annotated
 
 import typer
-from typing_extensions import Annotated
 
 import audacity_funcs as af
 import audacity_present as ap
