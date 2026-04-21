@@ -48,7 +48,7 @@ def process_lines(lines):
     return result
 
 
-def check_label_age(filename: str, verbose):
+def check_label_age(filename: str, verbose, precise=False):
     """
     Check whether the audacity file is newer than the label files.
     Export those label tracks whose corresponding label files are older than the audacity file
@@ -58,6 +58,9 @@ def check_label_age(filename: str, verbose):
     updates the modification time of the project file. Filed an issue with Audacity:
     https://github.com/audacity/audacity/issues/9161
 
+    When ``precise`` is True, uses the interactive ``ExportLabels:`` dialog path
+    (6-decimal precision). Otherwise uses the non-interactive GetInfo path
+    (3-decimal precision; see README Comments).
     """
     if verbose:
         print(
@@ -94,51 +97,108 @@ def check_label_age(filename: str, verbose):
         if label_file.stat().st_mtime < audacity_file_mtime
     ]
 
-    if outdated_candidates:
-        # export all label tracks and compare their contents with their corresponding label files.
-        # TODO: export only the label tracks that are older than the audacity file
-        ap.assert_audacity(verbose)
-        af.open_audio(filename, verbose)
-        af.export_label_tracks()
-        af.close_project()
-        # NOTE: these files are typically named "chords.txt", not "chords_song.txt"
-
-        for label_file in outdated_candidates:
-            exported_label_name = (
-                label_file.stem.replace(f"_{Path(filename.name).stem}", "")
-                + label_file.suffix
-            )
-            if verbose:
-                print(f"{label_file.name} is older than {filename.name}")
-            labels_from_file = process_lines(
-                label_file.read_text().splitlines(keepends=True)
-            )
-            labels_from_proj = process_lines(
-                Path(exported_label_name).read_text().splitlines(keepends=True)
-            )
-            sm = list(
-                difflib.unified_diff(
-                    labels_from_file,
-                    labels_from_proj,
-                    label_file.name,
-                    f"Audacity-label track: {exported_label_name}",
-                )
-            )
-            if sm:
-                print(
-                    f"Label file {label_file.name} differs from exported label file {exported_label_name}:"
-                )
-                print("".join(sm))
-            else:
-                print(
-                    f"Label file {label_file.name} and exported label file {exported_label_name} are identical."
-                    f"Deleting {exported_label_name}."
-                )
-                Path(exported_label_name).unlink(missing_ok=True)
-
-    else:
+    if not outdated_candidates:
         if verbose:
             print(f"All label files are newer than {filename.name}. Nothing to do.")
+        return
+
+    # TODO: export only the label tracks that are older than the audacity file
+    ap.assert_audacity(verbose)
+    af.open_audio(filename, verbose)
+
+    if precise:
+        _check_label_age_precise(filename, outdated_candidates)
+    else:
+        _check_label_age_via_getinfo(filename, outdated_candidates)
+
+    af.close_project()
+
+
+def _check_label_age_precise(filename, outdated_candidates):
+    """Interactive path: writes exported `<name>.txt` files into cwd, diffs, cleans up."""
+    af.export_label_tracks()
+    # NOTE: these files are typically named "chords.txt", not "chords_song.txt"
+    for label_file in outdated_candidates:
+        exported_label_name = (
+            label_file.stem.replace(f"_{Path(filename.name).stem}", "")
+            + label_file.suffix
+        )
+        labels_from_file = process_lines(
+            label_file.read_text().splitlines(keepends=True)
+        )
+        labels_from_proj = process_lines(
+            Path(exported_label_name).read_text().splitlines(keepends=True)
+        )
+        _report_diff(
+            label_file, exported_label_name, labels_from_file, labels_from_proj
+        )
+        # cleanup the interactive export artifact if identical
+        if labels_from_file == labels_from_proj:
+            Path(exported_label_name).unlink(missing_ok=True)
+
+
+def _check_label_age_via_getinfo(filename, outdated_candidates):
+    """Non-interactive path: compare versioned files against GetInfo content in memory."""
+    contents = af.get_label_tracks_content_via_getinfo()
+    out_dir = Path.cwd()
+    for label_file in outdated_candidates:
+        short_name = label_file.stem.replace(f"_{Path(filename.name).stem}", "")
+        expected = contents.get(short_name)
+        if expected is None:
+            print(f"No matching label track for {label_file.name}; skipping.")
+            continue
+        labels_from_file = process_lines(
+            label_file.read_text().splitlines(keepends=True)
+        )
+        labels_from_proj = process_lines(expected.splitlines(keepends=True))
+        _report_diff(label_file, short_name, labels_from_file, labels_from_proj)
+        _maybe_write_divergent_export(
+            expected_content=expected,
+            label_file=label_file,
+            short_name=short_name,
+            out_dir=out_dir,
+        )
+
+
+def _maybe_write_divergent_export(
+    expected_content: str,
+    label_file: Path,
+    short_name: str,
+    out_dir: Path,
+):
+    """Write ``expected_content`` to ``<out_dir>/<short_name>.txt`` iff it differs
+    (after ``process_lines`` normalization) from ``label_file``'s content.
+
+    Returns the written Path on divergence, or None when the two are equivalent
+    under normalization (in which case no file is written).
+    """
+    labels_from_file = process_lines(label_file.read_text().splitlines(keepends=True))
+    labels_from_proj = process_lines(expected_content.splitlines(keepends=True))
+    if labels_from_file == labels_from_proj:
+        return None
+    out_path = out_dir / f"{short_name}.txt"
+    out_path.write_text(expected_content)
+    return out_path
+
+
+def _report_diff(label_file, exported_label_name, labels_from_file, labels_from_proj):
+    sm = list(
+        difflib.unified_diff(
+            labels_from_file,
+            labels_from_proj,
+            label_file.name,
+            f"Audacity-label track: {exported_label_name}",
+        )
+    )
+    if sm:
+        print(
+            f"Label file {label_file.name} differs from exported label track {exported_label_name}:"
+        )
+        print("".join(sm))
+    else:
+        print(
+            f"Label file {label_file.name} and exported label track {exported_label_name} are identical."
+        )
 
 
 def prerequisites_met(verbose: bool) -> bool:
@@ -162,9 +222,9 @@ def prerequisites_met(verbose: bool) -> bool:
     return True
 
 
-def rebuild(filename=None, verbose=False, label=False, check=False):
+def rebuild(filename=None, verbose=False, label=False, check=False, precise=False):
     if check:
-        check_label_age(filename, verbose)
+        check_label_age(filename, verbose, precise=precise)
     elif filename:
         filename = Path(filename)
         if label:
@@ -177,7 +237,10 @@ def rebuild(filename=None, verbose=False, label=False, check=False):
         if af.is_audacity_project(filename):
             if verbose:
                 print(f"exporting labels from audacity project ({Path(filename).name})")
-            af.export_label_tracks()
+            if precise:
+                af.export_label_tracks()
+            else:
+                af.export_label_tracks_via_getinfo(filename)
             # TODO: export audio tracks, same naming scheme as labels (but ending in mp3)
             #       song track: "orig"
             #       other tracks: guitar (etc.)
@@ -191,11 +254,17 @@ def rebuild(filename=None, verbose=False, label=False, check=False):
         if af.get_selected_label_track_indices():
             if verbose:
                 print("exporting selected label track")
-            af.export_selected_label_tracks()
+            if precise:
+                af.export_selected_label_tracks()
+            else:
+                af.export_selected_label_tracks_via_getinfo()
         else:
             if verbose:
                 print("exporting all label tracks")
-            af.export_label_tracks()
+            if precise:
+                af.export_label_tracks()
+            else:
+                af.export_label_tracks_via_getinfo()
 
 
 def main():
@@ -212,13 +281,23 @@ def main():
         help="Check whether audacity file newer than label files and show differences.",
     )
     parser.add_argument(
+        "-p",
+        "--precise",
+        action="store_true",
+        help=(
+            "Use the interactive ExportLabels dialog (6-decimal precision) "
+            "instead of the default non-interactive GetInfo path "
+            "(3-decimal precision). See README Comments."
+        ),
+    )
+    parser.add_argument(
         "-V",
         "--version",
         action="version",
         version=get_version_info(_pkg_version("rebuildap")),
     )
     args = parser.parse_args()
-    rebuild(args.filename, args.verbose, args.label, args.check)
+    rebuild(args.filename, args.verbose, args.label, args.check, args.precise)
 
 
 if __name__ == "__main__":

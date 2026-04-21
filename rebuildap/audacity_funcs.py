@@ -670,6 +670,132 @@ def export_selected_or_all_label_tracks():
     export_labels_list(label_track_indices)
 
 
+# --- non-interactive export via GetInfo --------------------------------------
+#
+# GetInfo: Type=Labels returns a JSON payload containing all label tracks in a
+# single non-interactive call, which sidesteps the save-dialog of
+# `ExportLabels:`. The precision trade-off is documented in README.
+
+_OK_MARKERS = ("\nBatchCommand finished: OK\n", "\nBatchCommand finshed: OK\n")
+
+
+def _strip_ok_marker(raw: str) -> str:
+    """Remove Audacity's trailing 'BatchCommand ... OK' line from a pa.do response."""
+    for m in _OK_MARKERS:
+        if m in raw:
+            return raw.split(m)[0]
+    return raw
+
+
+def _parse_labels_response(raw: str) -> Dict[int, List[tuple]]:
+    """Parse a GetInfo: Type=Labels response into {track_idx: [(start, end, text), ...]}.
+
+    Times are always returned as floats, even when JSON omitted trailing zeros.
+    """
+    data = json.loads(_strip_ok_marker(raw))
+    out: Dict[int, List[tuple]] = {}
+    for entry in data:
+        idx, labels = entry[0], entry[1]
+        out[idx] = [(float(s), float(e), t) for s, e, t in labels]
+    return out
+
+
+def _parse_tracks_response(raw: str) -> List[dict]:
+    """Parse a GetInfo: Type=Tracks response into a list of track dicts."""
+    return json.loads(_strip_ok_marker(raw))
+
+
+def _label_track_names_by_idx(tracks: Iterable[dict]) -> Dict[int, str]:
+    """Return {0-based-track-idx: name} for every kind='label' track."""
+    return {i: t["name"] for i, t in enumerate(tracks) if t.get("kind") == "label"}
+
+
+def _format_label_line(start: float, end: float, text: str) -> str:
+    """Format one label as Audacity's native .txt line (trailing tab even on empty text)."""
+    return f"{start:.6f}\t{end:.6f}\t{text}\n"
+
+
+def _format_track_txt(labels: Iterable[tuple]) -> str:
+    """Concatenate per-label lines into full .txt content."""
+    return "".join(_format_label_line(s, e, t) for s, e, t in labels)
+
+
+def _derive_label_filename(track_name: str, aup3_stem: str) -> str:
+    """Build the versioned label filename: `<track>_<stem>.txt`."""
+    return f"{track_name}_{aup3_stem}.txt"
+
+
+def _resolve_output_context(aup3_path=None):
+    """Return (out_dir: Path, aup3_stem: str).
+
+    When ``aup3_path`` is given, derive both from it. Otherwise fall back to
+    cwd + the name of the first wave track in the open project (conventional
+    project-dir workflow).
+    """
+    if aup3_path is not None:
+        p = Path(aup3_path)
+        return p.parent, p.stem
+    tracks = _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
+    wave = next((t for t in tracks if t.get("kind") == "wave"), None)
+    if wave is None:
+        raise RuntimeError("Cannot derive output context: no wave track in project")
+    return Path.cwd(), wave["name"]
+
+
+def get_label_tracks_content_via_getinfo() -> Dict[str, str]:
+    """Return ``{track_name: .txt content}`` via GetInfo. Non-interactive, no files written.
+
+    Useful for comparing against on-disk versioned label files without the
+    side-effect of overwriting them.
+    """
+    labels_by_idx = _parse_labels_response(pa.do("GetInfo: Type=Labels"))
+    names_by_idx = _label_track_names_by_idx(
+        _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
+    )
+    return {
+        names_by_idx[idx]: _format_track_txt(labels)
+        for idx, labels in labels_by_idx.items()
+        if idx in names_by_idx
+    }
+
+
+def _write_via_getinfo(indices: Iterable[int], aup3_path=None) -> List[Path]:
+    """Shared core: write one .txt per given label-track index. Returns written paths."""
+    out_dir, stem = _resolve_output_context(aup3_path)
+    labels_by_idx = _parse_labels_response(pa.do("GetInfo: Type=Labels"))
+    names_by_idx = _label_track_names_by_idx(
+        _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
+    )
+    written: List[Path] = []
+    wanted = set(indices)
+    for idx, labels in labels_by_idx.items():
+        if idx not in wanted:
+            continue
+        name = names_by_idx.get(idx)
+        if name is None:
+            continue
+        out_path = out_dir / _derive_label_filename(name, stem)
+        out_path.write_text(_format_track_txt(labels))
+        written.append(out_path)
+    return written
+
+
+def export_label_tracks_via_getinfo(aup3_path=None) -> List[Path]:
+    """Non-interactive parallel of ``export_label_tracks``."""
+    return _write_via_getinfo(get_label_track_indices(), aup3_path)
+
+
+def export_selected_label_tracks_via_getinfo(aup3_path=None) -> List[Path]:
+    """Non-interactive parallel of ``export_selected_label_tracks``."""
+    return _write_via_getinfo(get_selected_label_track_indices(), aup3_path)
+
+
+def export_selected_or_all_label_tracks_via_getinfo(aup3_path=None) -> List[Path]:
+    """Non-interactive parallel of ``export_selected_or_all_label_tracks``."""
+    indices = get_selected_label_track_indices() or get_label_track_indices()
+    return _write_via_getinfo(indices, aup3_path)
+
+
 def import_audio(filename: Path):
     """
     Imports audio into Audacity.
