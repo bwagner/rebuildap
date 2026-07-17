@@ -44,9 +44,12 @@ When not providing a file at all, a running instance of Audacity with a project
 containing label tracks is searched for, of which the selected label tracks are
 exported or all if none are selected.
 
-Note that exporting label tracks is forcedly interactive, as the respective scripting
-command [ExportLabels](https://manual.audacityteam.org/man/scripting_reference.html#:~:text=Description-,ExportLabels%3A,-Export%20Labels)
-fails to offer a non-interactive mode.
+By default, label tracks are exported non-interactively via the scripting pipe
+(`GetInfo: Type=Labels`), so batch runs don't stop for a dialog. Pass `-p` /
+`--precise` to instead use the interactive
+[ExportLabels](https://manual.audacityteam.org/man/scripting_reference.html#:~:text=Description-,ExportLabels%3A,-Export%20Labels)
+dialog, which preserves full 6-decimal precision. See [Comments](#two-ways-to-export-label-tracks)
+for the trade-off.
 
 ## Recommendation
 
