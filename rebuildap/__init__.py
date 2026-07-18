@@ -48,7 +48,7 @@ def process_lines(lines):
     return result
 
 
-def check_label_age(filename: str, verbose, precise=False):
+def check_label_age(filename: str, verbose):
     """
     Check whether the audacity file is newer than the label files.
     Export those label tracks whose corresponding label files are older than the audacity file
@@ -57,10 +57,6 @@ def check_label_age(filename: str, verbose, precise=False):
     Unfortunately, opening an audacity project and applying changes that are undone still
     updates the modification time of the project file. Filed an issue with Audacity:
     https://github.com/audacity/audacity/issues/9161
-
-    When ``precise`` is True, uses the interactive ``ExportLabels:`` dialog path
-    (6-decimal precision). Otherwise uses the non-interactive GetInfo path
-    (3-decimal precision; see README Comments).
     """
     if verbose:
         print(
@@ -106,10 +102,7 @@ def check_label_age(filename: str, verbose, precise=False):
     ap.assert_audacity(verbose)
     af.open_audio(filename, verbose)
 
-    if precise:
-        _check_label_age_precise(filename, outdated_candidates)
-    else:
-        _check_label_age_via_getinfo(filename, outdated_candidates)
+    _check_label_age_via_getinfo(filename, outdated_candidates)
 
     # Close via AppleScript Cmd-W rather than pa.do("Close:") — avoids the
     # mod-script-pipe → lib-menus.dylib crash path that bites after a few
@@ -119,29 +112,6 @@ def check_label_age(filename: str, verbose, precise=False):
     # with its .aup3 stem. If focus moved to the user's own project, it
     # refuses and leaves both windows open rather than discarding their work.
     ap.close_owned_window(filename.stem, verbose)
-
-
-def _check_label_age_precise(filename, outdated_candidates):
-    """Interactive path: writes exported `<name>.txt` files into cwd, diffs, cleans up."""
-    af.export_label_tracks()
-    # NOTE: these files are typically named "chords.txt", not "chords_song.txt"
-    for label_file in outdated_candidates:
-        exported_label_name = (
-            label_file.stem.replace(f"_{Path(filename.name).stem}", "")
-            + label_file.suffix
-        )
-        labels_from_file = process_lines(
-            label_file.read_text().splitlines(keepends=True)
-        )
-        labels_from_proj = process_lines(
-            Path(exported_label_name).read_text().splitlines(keepends=True)
-        )
-        _report_diff(
-            label_file, exported_label_name, labels_from_file, labels_from_proj
-        )
-        # cleanup the interactive export artifact if identical
-        if labels_from_file == labels_from_proj:
-            Path(exported_label_name).unlink(missing_ok=True)
 
 
 def _check_label_age_via_getinfo(filename, outdated_candidates):
@@ -232,11 +202,9 @@ def prerequisites_met(verbose: bool) -> bool:
     return True
 
 
-def rebuild(
-    filename=None, verbose=False, label=False, check=False, precise=False, save=True
-):
+def rebuild(filename=None, verbose=False, label=False, check=False, save=True):
     if check:
-        check_label_age(filename, verbose, precise=precise)
+        check_label_age(filename, verbose)
     elif filename:
         filename = Path(filename)
         if label:
@@ -249,10 +217,7 @@ def rebuild(
         if af.is_audacity_project(filename):
             if verbose:
                 print(f"exporting labels from audacity project ({Path(filename).name})")
-            if precise:
-                af.export_label_tracks()
-            else:
-                af.export_label_tracks_via_getinfo(filename)
+            af.export_label_tracks_via_getinfo(filename)
             # TODO: export audio tracks, same naming scheme as labels (but ending in mp3)
             #       song track: "orig"
             #       other tracks: guitar (etc.)
@@ -288,17 +253,11 @@ def rebuild(
         if af.get_selected_label_track_indices():
             if verbose:
                 print("exporting selected label track")
-            if precise:
-                af.export_selected_label_tracks()
-            else:
-                af.export_selected_label_tracks_via_getinfo()
+            af.export_selected_label_tracks_via_getinfo()
         else:
             if verbose:
                 print("exporting all label tracks")
-            if precise:
-                af.export_label_tracks()
-            else:
-                af.export_label_tracks_via_getinfo()
+            af.export_label_tracks_via_getinfo()
 
 
 def main():
@@ -313,16 +272,6 @@ def main():
         "--check",
         action="store_true",
         help="Check whether audacity file newer than label files and show differences.",
-    )
-    parser.add_argument(
-        "-p",
-        "--precise",
-        action="store_true",
-        help=(
-            "Use the interactive ExportLabels dialog (6-decimal precision) "
-            "instead of the default non-interactive GetInfo path "
-            "(3-decimal precision). See README Comments."
-        ),
     )
     parser.add_argument(
         "-n",
@@ -346,7 +295,6 @@ def main():
         args.verbose,
         args.label,
         args.check,
-        args.precise,
         save=not args.no_save,
     )
 

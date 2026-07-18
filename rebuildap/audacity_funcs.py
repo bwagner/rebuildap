@@ -679,78 +679,12 @@ def redo():
     return pa.do("Redo:")
 
 
-def export_labels():
-    """
-    Unavoidably interactive.
-    """
-    return pa.do("ExportLabels:")
-
-
-def export_labels_list(labels: List[int]):
-    """
-    Interactive due to export_labels' interactivity
-
-    Exports label tracks given by track number.
-    """
-    for idx in labels:
-        export_label_of_idx(idx)
-
-
-def export_label_of_idx(idx):
-    """
-    Exports label track given by track index.
-
-    Interactive due to export_labels' interactivity.
-
-    Since Audacity does not allow to export a single label track,
-    this function does the following:
-    1. selects all label tracks,
-    2. unselects the label track given by idx,
-    3. removes all selected label tracks,
-    4. exports labels (which is now one label track)
-    5. undoes the removing of all label tracks, to restore the project to its original state.
-    """
-    select_label_tracks()
-    unselect_track(idx)
-    remove_selected_tracks()
-    export_labels()
-    undo()
-
-
-def export_selected_label_tracks():
-    """
-    Interactive due to export_labels' interactivity
-
-    Goes through the selected label tracks one by one:
-        removes all other label tracks,
-        exports label (interactively) undoes the removing of all label tracks,
-    """
-    export_labels_list(get_selected_label_track_indices())
-
-
-def export_label_tracks():
-    """
-    Interactive due to export_labels' interactivity
-
-    Goes through the label tracks one by one:
-        removes all other label tracks,
-        exports label (interactively) undoes the removing of all label tracks,
-    """
-    export_labels_list(get_label_track_indices())
-
-
-def export_selected_or_all_label_tracks():
-    """
-    Interactive due to export_labels' interactivity
-
-    Goes through the label tracks one by one:
-        removes all other label tracks,
-        exports label (interactively) undoes the removing of all label tracks,
-    """
-    label_track_indices = (
-        get_selected_label_track_indices() or get_label_track_indices()
-    )
-    export_labels_list(label_track_indices)
+# The interactive `ExportLabels:` export path was retired 2026-07-18. Audacity's
+# ExportLabels command takes no parameters (verified against the scripting
+# reference), so the save dialog alone decided where artifacts landed and the
+# caller had to guess the location afterwards. Its only advantage over the
+# GetInfo path below was 6-decimal instead of 3-decimal precision, which the
+# 2026-04-21 decision had already judged inaudible. See decisions.md.
 
 
 # --- non-interactive export via GetInfo --------------------------------------
@@ -866,17 +800,17 @@ def _write_via_getinfo(indices: Iterable[int], aup3_path=None) -> List[Path]:
 
 
 def export_label_tracks_via_getinfo(aup3_path=None) -> List[Path]:
-    """Non-interactive parallel of ``export_label_tracks``."""
+    """Export every label track, one file per track."""
     return _write_via_getinfo(get_label_track_indices(), aup3_path)
 
 
 def export_selected_label_tracks_via_getinfo(aup3_path=None) -> List[Path]:
-    """Non-interactive parallel of ``export_selected_label_tracks``."""
+    """Export the selected label tracks, one file per track."""
     return _write_via_getinfo(get_selected_label_track_indices(), aup3_path)
 
 
 def export_selected_or_all_label_tracks_via_getinfo(aup3_path=None) -> List[Path]:
-    """Non-interactive parallel of ``export_selected_or_all_label_tracks``."""
+    """Export the selected label tracks, or all of them when none is selected."""
     indices = get_selected_label_track_indices() or get_label_track_indices()
     return _write_via_getinfo(indices, aup3_path)
 

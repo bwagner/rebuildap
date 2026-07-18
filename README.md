@@ -12,7 +12,7 @@ keeping track of the (rarely changing) original audio source material and the (m
 textual label files.
 
 ```console
-usage: rebuildap [-h] [-v] [-l] [-c] [-p] [-n] [-V] [filename]
+usage: rebuildap [-h] [-v] [-l] [-c] [-n] [-V] [filename]
 
 rebuild Audacity project
 
@@ -25,9 +25,6 @@ options:
   -l, --label    Import label file.
   -c, --check    Check whether audacity file newer than label files and show
                  differences.
-  -p, --precise  Use the interactive ExportLabels dialog (6-decimal precision)
-                 instead of the default non-interactive GetInfo path
-                 (3-decimal precision). See README Comments.
   -n, --no-save  Don't save the rebuilt project as <audio-stem>.aup3 beside
                  the audio file. By default it is saved when no .aup3 exists
                  yet; an existing one is never overwritten.
@@ -60,12 +57,10 @@ content actually diverges, so the condition would never clear. The rebuild
 proves the two agree, so recording that is accurate — no label file's *content*
 is modified.
 
-By default, label tracks are exported non-interactively via the scripting pipe
-(`GetInfo: Type=Labels`), so batch runs don't stop for a dialog. Pass `-p` /
-`--precise` to instead use the interactive
-[ExportLabels](https://manual.audacityteam.org/man/scripting_reference.html#:~:text=Description-,ExportLabels%3A,-Export%20Labels)
-dialog, which preserves full 6-decimal precision. See [Comments](#two-ways-to-export-label-tracks)
-for the trade-off.
+Label tracks are exported non-interactively via the scripting pipe
+(`GetInfo: Type=Labels`), so batch runs never stop for a dialog. See
+[Comments](#two-ways-to-export-label-tracks) for the precision trade-off and why
+the interactive alternative was retired.
 
 ## Recommendation
 
@@ -166,9 +161,15 @@ For beat-quantized labels (the common case, e.g. output of
 [`DBNDownBeatTracker`](https://github.com/CPJKU/madmom/blob/main/bin/DBNDownBeatTracker)
 rounded to 2 decimals) both paths yield identical files.
 
-`rebuildap` uses the non-interactive `GetInfo` path by default. Pass `-p` /
-`--precise` to fall back to the interactive dialog path when exact fidelity on
-sub-beat labels matters.
+`rebuildap` uses the non-interactive `GetInfo` path exclusively. The interactive
+dialog path was offered behind `-p` / `--precise` until 2026-07-18 and has been
+retired: `ExportLabels:` takes **no parameters** (see the
+[scripting reference](https://manual.audacityteam.org/man/scripting_reference.html#:~:text=Description-,ExportLabels%3A,-Export%20Labels)),
+so the save dialog alone decided where each artifact landed and the caller had
+to guess that location afterwards — it read them back from the current working
+directory, which was wrong whenever `rebuildap` was invoked from elsewhere.
+Combined with one dialog click per label track, the ~0.5 ms precision edge did
+not justify keeping a second export path alive.
 
 A [Nyquist](https://manual.audacityteam.org/man/nyquist.html) plug-in route
 was investigated and rejected: Nyquist-side label access also goes through
