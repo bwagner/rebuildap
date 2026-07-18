@@ -229,8 +229,46 @@ saved-as states, since several of the workarounds above rest on it:
   Same-stem projects in different directories are permanently indistinguishable.
 - Saving retitles the window to the new stem.
 
-Also observed: **modifying a project and then undoing still rewrites the `.aup3`
-on disk**, even when the session is subsequently saved to a *different* path
-(md5 and size both changed). Merely *opening* a project does not — that was
-verified byte-identical. Presumably a WAL checkpoint on close. Assume any
-write-touching operation dirties the file regardless of where you save.
+## When an .aup3 changes on disk
+
+An `.aup3` is a SQLite database — hence the `.aup3-shm` / `.aup3-wal` companions
+next to an open project, and hence all three being in the `.gitignore` advice.
+It runs in [WAL (write-ahead log)](https://sqlite.org/wal.html) mode: verified
+`PRAGMA journal_mode = wal` on a copy, with `page_size` 65536 × `page_count`
+1326 = 86,900,736 bytes, exactly the file size.
+
+Measured on 3.7.8 (2026-07-18) by snapshotting md5, size and sidecars at every
+step of open -> edit -> undo -> save-as-elsewhere -> close -> quit:
+
+| step | md5 | size | `-wal` |
+|---|---|---|---|
+| before anything | `62744d9aa160` | 86,900,736 | 0 |
+| project open, untouched | `62744d9aa160` | 86,900,736 | 0 |
+| after `NewLabelTrack:` | **`92c1bfb1c49f`** | 86,900,736 | 131,152 |
+| after `Undo:` | **`61ba21111e3a`** | 86,900,736 | 131,152 |
+| after save-as **elsewhere** | **`56be671822ae`** | **86,675,456** | gone |
+| after closing the window | `56be671822ae` | 86,675,456 | gone |
+| after quitting Audacity | `56be671822ae` | 86,675,456 | gone |
+
+What that actually shows, as against the plausible guess that a checkpoint on
+close is responsible:
+
+- **The main file changes the moment you edit** — not at close. Its bytes differ
+  right after `NewLabelTrack:`, while its size is unchanged and the WAL has
+  grown.
+- **Undo does not restore it.** It changes the bytes again, to a third value.
+- **Save-as *elsewhere* is what rewrites and shrinks the original**, dropping the
+  `-wal` / `-shm` sidecars with it. Detaching the old database checkpoints and
+  tidies it; it does not put it back the way it was.
+- **Closing the window and quitting change nothing further.** The damage, such as
+  it is, is already done by then.
+- Merely *opening* a project is safe — byte-identical, confirmed here and in a
+  separate run.
+
+So: assume any write-touching operation dirties the file immediately, regardless
+of where you later save. This is the same effect `check_label_age`'s docstring
+attributes to [audacity#9161](https://github.com/audacity/audacity/issues/9161).
+
+One trap for tooling: opening an `.aup3` with SQLite **read-only still creates
+`-shm` and `-wal` sidecars** next to it (the main file's bytes are untouched).
+A read-only inspection is therefore not a no-op on the directory.

@@ -119,6 +119,12 @@ Add these to your project's `.gitignore`:
 *.aup3-wal
 ```
 
+An `.aup3` is a SQLite database running in
+[WAL (write-ahead log)](https://sqlite.org/wal.html) mode, so an open project is
+accompanied by `-shm` and `-wal` files — none of the three belong in git. Note
+that the `.aup3` changes on disk as soon as you edit a project, and an undo does
+not put it back: [the measurements are here](docs/audacity-quirks.md#when-an-aup3-changes-on-disk).
+
 If several people work on the same project, have everyone configure
 [git-lfs locks](https://github.com/git-lfs/git-lfs/wiki/File-Locking) so two of
 you can't modify a binary at once:
