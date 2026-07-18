@@ -352,6 +352,24 @@ mode reports it and moves on to the next project rather than aborting a sweep,
 and deliberately skips its `close_owned_window` step — that window is not ours
 to close, and it may hold edits the label files do not have.
 
+The check runs **before `assert_audacity`**, not only inside `open_project`, so
+a project that is going to be skipped costs nothing at all. An already-open
+project has tracks, so it fails the empty-project probe and `assert_audacity`
+answers with a Cmd-N — which would leave a stray empty window behind for every
+project a sweep skips. Measured: 0.22 s and no new window, against 1.8 s and one
+stray window when the check sat behind `assert_audacity`.
+
+Running that early needs two guards (`audacity_funcs.project_already_open`):
+
+- **`.aup3` input only.** Audio rebuilds into a *new* project and can never
+  raise the alert, yet it shares its stem with the project it builds
+  (`angie.opus` -> `angie.aup3`), so a stem check alone would refuse to rebuild
+  whenever the old project happened to be open.
+- **Only when Audacity is running.** Listing the windows of a process that does
+  not exist is an osascript *error*, duly reported on stderr, so asking
+  unconditionally would put a spurious failure in front of the user on every
+  cold start. A stopped Audacity cannot have anything open anyway.
+
 Two blind spots remain, both degrading to the old behaviour (a timeout) rather
 than to anything worse, so the timeout message now names this as a likely cause:
 

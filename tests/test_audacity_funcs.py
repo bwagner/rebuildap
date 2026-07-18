@@ -85,6 +85,10 @@ def _spy_pipe(monkeypatch):
 def _fake_already_open(monkeypatch, is_open):
     from rebuildap import audacity_present as ap
 
+    # Audacity has to be faked as running too: project_already_open refuses to
+    # ask a stopped Audacity about its windows, since that is an osascript
+    # error rather than an empty answer.
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: True)
     monkeypatch.setattr(ap, "project_window_open", lambda _stem: is_open)
 
 
@@ -131,3 +135,62 @@ def test_timeout_points_at_the_already_open_dialog(monkeypatch):
 
     with pytest.raises(TimeoutError, match="already open"):
         af.open_project(Path("/tmp/angie.aup3"))
+
+
+# --- not launching Audacity just to skip a project -------------------------
+#
+# The already-open check used to run inside open_project, i.e. after
+# assert_audacity had already ensured a *usable* project window. An open
+# project has tracks, so it fails the empty-project probe and assert_audacity
+# sends Cmd-N — leaving a stray empty window behind for every project a sweep
+# skips. Checking before that means no window is created for a project we are
+# not going to touch.
+
+
+def test_a_project_that_is_not_open_is_not_reported_open(monkeypatch):
+    from rebuildap import audacity_present as ap
+
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: True)
+    monkeypatch.setattr(ap, "project_window_open", lambda _stem: False)
+    assert af.project_already_open(Path("/tmp/angie.aup3")) is False
+
+
+def test_an_open_aup3_is_reported_open(monkeypatch):
+    from rebuildap import audacity_present as ap
+
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: True)
+    monkeypatch.setattr(ap, "project_window_open", lambda stem: stem == "angie")
+    assert af.project_already_open(Path("/tmp/angie.aup3")) is True
+
+
+def test_audio_input_is_never_skipped_even_when_a_same_stem_project_is_open(
+    monkeypatch,
+):
+    """angie.opus rebuilds into a *new* project; angie.aup3 being open is fine.
+
+    Only opening an .aup3 can raise the already-open alert. Importing audio
+    cannot, and audio shares its stem with the project, so checking by stem
+    alone would refuse to rebuild whenever the old project happened to be open.
+    """
+    from rebuildap import audacity_present as ap
+
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: True)
+    monkeypatch.setattr(ap, "project_window_open", lambda _stem: True)
+    assert af.project_already_open(Path("/tmp/angie.opus")) is False
+
+
+def test_a_stopped_audacity_is_not_asked_about_its_windows(monkeypatch):
+    """Listing windows of a non-running Audacity prints an osascript error.
+
+    The check now runs before Audacity is guaranteed to be up, so it must not
+    ask unless there is a process to ask about — otherwise every cold start
+    reports a spurious failure on stderr.
+    """
+    from rebuildap import audacity_present as ap
+
+    asked = []
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: False)
+    monkeypatch.setattr(ap, "project_window_open", lambda s: asked.append(s) or True)
+
+    assert af.project_already_open(Path("/tmp/angie.aup3")) is False
+    assert asked == []

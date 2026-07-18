@@ -834,6 +834,49 @@ def import_audio(filename: Path):
     pa.import_audio(abs_path)
 
 
+def project_already_open(filename: Path) -> bool:
+    """True if opening ``filename`` would hit the "already open" alert.
+
+    Checked *before* ``assert_audacity``, not just inside :func:`open_project`,
+    so a project that is going to be skipped costs nothing: an already-open
+    project has tracks, so it fails the empty-project probe and
+    ``assert_audacity_window`` answers with a Cmd-N — leaving a stray empty
+    window behind for every project a sweep skips.
+
+    Two guards, both load-bearing:
+
+    - **Only ``.aup3`` input.** Audio rebuilds into a *new* project and can
+      never raise the alert, yet it shares its stem with the project it builds
+      (``angie.opus`` -> ``angie.aup3``), so a stem check alone would refuse to
+      rebuild whenever the old project happened to be open.
+    - **Only when Audacity is running.** Listing the windows of a process that
+      does not exist is an osascript *error*, which ``audacity_window_names``
+      duly reports on stderr — so asking unconditionally would put a spurious
+      failure in front of the user on every cold start. A stopped Audacity
+      also cannot have anything open, so there is nothing to learn.
+    """
+    from . import audacity_present as ap
+
+    if not is_audacity_project(filename):
+        return False
+    if not ap.is_audacity_running():
+        return False
+    return ap.project_window_open(filename.expanduser().resolve().stem)
+
+
+def assert_not_already_open(filename: Path) -> None:
+    """Raise :class:`ProjectAlreadyOpenError` if the project is already open."""
+    if not project_already_open(filename):
+        return
+    name = filename.expanduser().resolve().name
+    raise ProjectAlreadyOpenError(
+        f'"{name}" is already open in another Audacity window. Opening it '
+        "again would raise a modal alert that blocks the scripting pipe, so "
+        "it was left alone. Close that window (or save and close it, if it "
+        "has unsaved edits) and run again."
+    )
+
+
 def open_project(
     filename: Path,
     retries: int = 1,
@@ -865,14 +908,10 @@ def open_project(
 
     # Before anything touches the pipe: sending the command is what raises the
     # "already open in another window" alert, and that alert then blocks the
-    # command until acknowledged.
-    if ap.project_window_open(abs_path.stem):
-        raise ProjectAlreadyOpenError(
-            f'"{abs_path.name}" is already open in another Audacity window. '
-            "Opening it again would raise a modal alert that blocks the "
-            "scripting pipe, so it was left alone. Close that window (or save "
-            "and close it, if it has unsaved edits) and run again."
-        )
+    # command until acknowledged. Callers check this earlier too, to avoid
+    # starting Audacity at all for a project they will skip; this one is the
+    # backstop for callers that don't.
+    assert_not_already_open(abs_path)
 
     cmd = f'OpenProject2: Filename="{abs_path}"'
     # No-op ping first — fail fast if pipe is wedged, rather than waiting out

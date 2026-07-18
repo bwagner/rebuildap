@@ -100,8 +100,15 @@ def check_label_age(filename: str, verbose):
         return
 
     # TODO: export only the label tracks that are older than the audacity file
-    ap.assert_audacity(verbose)
     try:
+        # Ahead of assert_audacity, so a project we are going to skip costs
+        # nothing: it has tracks, so it fails the empty-project probe and
+        # assert_audacity would answer with a Cmd-N, leaving a stray empty
+        # window behind for every skipped project in a sweep.
+        af.assert_not_already_open(filename)
+        ap.assert_audacity(verbose)
+        # Still guarded inside open_project, which catches the race where the
+        # user opens the project between the check above and the command.
         af.open_audio(filename, verbose)
     except af.ProjectAlreadyOpenError as e:
         # Report and move on: in a sweep across many projects one already-open
@@ -222,8 +229,9 @@ def rebuild(filename=None, verbose=False, label=False, check=False, save=True):
                 print("importing label into open audacity project.")
             af.make_label_track_from_file(filename)
             return
-        ap.assert_audacity(verbose)
         try:
+            af.assert_not_already_open(filename)
+            ap.assert_audacity(verbose)
             af.open_audio(filename, verbose)
         except af.ProjectAlreadyOpenError as e:
             # A single explicit target, unlike the sweep in check mode: report

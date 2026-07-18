@@ -154,3 +154,39 @@ def test_after_save_and_touch_no_label_reads_as_outdated(
         p for p in af.create_labels_glob(project) if p.stat().st_mtime < aup3_mtime
     ]
     assert outdated == []
+
+
+# --- check mode skips before touching Audacity -----------------------------
+
+
+def test_check_mode_skips_an_open_project_without_starting_audacity(
+    monkeypatch, tmp_path, capsys
+):
+    """No Cmd-N, no launch, no pipe: a skipped project must cost nothing.
+
+    Regression guard for the ordering — the check has to happen before
+    assert_audacity, which would otherwise leave a stray empty window behind
+    for every project a sweep skips.
+    """
+    import rebuildap
+    from rebuildap import audacity_funcs as af
+    from rebuildap import audacity_present as ap
+
+    project = tmp_path / "angie.aup3"
+    label = tmp_path / "parts_angie.txt"
+    label.write_text("0.0\t1.0\tintro\n")
+    project.write_text("not really a project")
+    os.utime(label, (1, 1))  # older than the project, so -c would want to open
+
+    monkeypatch.setattr(af, "project_already_open", lambda _f: True)
+    for name in ("assert_audacity",):
+        monkeypatch.setattr(
+            ap, name, lambda *a, **k: pytest.fail(f"{name} must not run")
+        )
+    monkeypatch.setattr(
+        af, "open_audio", lambda *a, **k: pytest.fail("open_audio must not run")
+    )
+
+    rebuildap.check_label_age(str(project), verbose=False)
+
+    assert "angie.aup3" in capsys.readouterr().err
