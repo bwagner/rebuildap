@@ -57,7 +57,11 @@ def check_label_age(filename: str, verbose):
 
     Unfortunately, opening an audacity project and applying changes that are undone still
     updates the modification time of the project file. Filed an issue with Audacity:
-    https://github.com/audacity/audacity/issues/9161
+    https://github.com/audacity/audacity/issues/9161 — **closed as not-planned**:
+    every edit is written to the project file before you press Save, so undo and
+    crash recovery can work, and that changes the file even when the project data
+    is intact. Inherent to the format, so design around it rather than wait.
+    See docs/audacity-quirks.md > When an .aup3 changes on disk.
     """
     if verbose:
         print(

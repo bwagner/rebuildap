@@ -275,8 +275,23 @@ close is responsible:
   separate run.
 
 So: assume any write-touching operation dirties the file immediately, regardless
-of where you later save. This is the same effect `check_label_age`'s docstring
-attributes to [audacity#9161](https://github.com/audacity/audacity/issues/9161).
+of where you later save.
+
+This matches the upstream explanation in
+[audacity#9161](https://github.com/audacity/audacity/issues/9161) — the issue
+`check_label_age`'s docstring cites — which is **closed as not-planned**
+(2025-08-27). A maintainer's comment there gives the cause directly, and it is
+worth quoting because it is the real mechanism rather than an inference from
+file bytes:
+
+> Every edit operation you do is saved to the project file even before you press
+> "Save" button, so the undo and crash recovery systems can do their work. At the
+> same time, this changes the file even if the project data is intact.
+
+It is inherent to the project format, not a bug awaiting a fix. The Audacity 4
+idea floated there is a temporary copy on open, synced on close
+([PR #8405](https://github.com/audacity/audacity/pull/8405), explicitly not
+production-ready). So treat this as permanent behaviour to design around.
 
 One trap for tooling: opening an `.aup3` with SQLite **read-only still creates
 `-shm` and `-wal` sidecars** next to it (the main file's bytes are untouched).

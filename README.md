@@ -99,7 +99,10 @@ options:
   under Preferences > Modules > mod-script-pipe
 - The [Nyquist](https://manual.audacityteam.org/man/nyquist.html) plug-in
   [ImportLabels.ny](https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny):
-  Tools > Nyquist Plugin Installer > pick `ImportLabels.ny` > Apply > restart Audacity
+  Tools > Nyquist Plugin Installer > pick `ImportLabels.ny` > Apply > restart Audacity.
+  This step exists only because mod-script-pipe cannot import labels from a file;
+  if [audacity#7171](https://github.com/audacity/audacity/issues/7171) ever lands,
+  the plug-in becomes unnecessary.
 - [uv](https://docs.astral.sh/uv/)
 
 ## Install
