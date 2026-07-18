@@ -84,6 +84,43 @@ def test_osascript_failure_yields_empty_list(monkeypatch):
     assert ap.audacity_window_names() == []
 
 
+# --- already-open detection -----------------------------------------------
+#
+# Opening a project that is already open raises a modal "Error Opening Project"
+# dialog that blocks OpenProject2 the way the format-upgrade dialog does. Unlike
+# that one it is *preventable*: Audacity titles a project window with its .aup3
+# stem, so the condition is visible before the command is sent. Clicking this
+# dialog is the one dismissal with live evidence against it (Audacity exited),
+# hence detection rather than dismissal.
+
+
+def test_project_window_open_matches_its_aup3_stem(monkeypatch):
+    _fake_window_names(monkeypatch, [["Audacity", "angie"]])
+    assert ap.project_window_open("angie") is True
+
+
+def test_a_different_project_does_not_count_as_open(monkeypatch):
+    _fake_window_names(monkeypatch, [["Audacity", "brown_sugar"]])
+    assert ap.project_window_open("angie") is False
+
+
+def test_no_windows_means_not_open(monkeypatch):
+    _fake_window_names(monkeypatch, [[]])
+    assert ap.project_window_open("angie") is False
+
+
+def test_empty_untitled_projects_do_not_match_a_stem(monkeypatch):
+    """Every empty project window is titled 'Audacity' — never a real stem."""
+    _fake_window_names(monkeypatch, [["Audacity", "Audacity"]])
+    assert ap.project_window_open("angie") is False
+
+
+def test_stem_match_is_exact_not_substring(monkeypatch):
+    """'angie' must not be reported open by a window titled 'angie_live'."""
+    _fake_window_names(monkeypatch, [["angie_live"]])
+    assert ap.project_window_open("angie") is False
+
+
 # --- osascript failure reporting ------------------------------------------
 
 

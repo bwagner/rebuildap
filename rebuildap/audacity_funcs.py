@@ -109,6 +109,17 @@ LABEL_PRIORITY_ORDER = [LABEL_PART, LABEL_CHORD, LABEL_LYRIC]
 
 AUDACITY_EXTENSION = "aup3"
 
+
+class ProjectAlreadyOpenError(RuntimeError):
+    """The project is already open in another Audacity window.
+
+    Distinct from a timeout: sending ``OpenProject2:`` anyway would raise a
+    modal alert that blocks the command and wedges the pipe, so this is raised
+    *instead of* opening. The window is left alone — it may be the user's, and
+    it may hold edits the label files do not have.
+    """
+
+
 # when mod-script-pipe worked out fine:
 RESPONSE_OK = "\nBatchCommand finshed: OK\n"
 
@@ -841,12 +852,28 @@ def open_project(
     updating" dialog that would otherwise hold this command open until it times
     out, so a watcher acknowledges that one dialog while the open is in flight.
     See ``audacity_present.dismissing_upgrade_dialog``.
+
+    A project that is *already open* raises a different modal alert, which is
+    refused rather than dismissed — see ``ProjectAlreadyOpenError`` and
+    ``audacity_present.project_window_open``.
     """
     # Imported here rather than at module scope: audacity_present imports this
     # module, so a top-level import would be circular.
     from . import audacity_present as ap
 
     abs_path = filename.expanduser().resolve()
+
+    # Before anything touches the pipe: sending the command is what raises the
+    # "already open in another window" alert, and that alert then blocks the
+    # command until acknowledged.
+    if ap.project_window_open(abs_path.stem):
+        raise ProjectAlreadyOpenError(
+            f'"{abs_path.name}" is already open in another Audacity window. '
+            "Opening it again would raise a modal alert that blocks the "
+            "scripting pipe, so it was left alone. Close that window (or save "
+            "and close it, if it has unsaved edits) and run again."
+        )
+
     cmd = f'OpenProject2: Filename="{abs_path}"'
     # No-op ping first — fail fast if pipe is wedged, rather than waiting out
     # the per-attempt timeout on an expensive command that would modify state.
@@ -861,6 +888,15 @@ def open_project(
             last_err = e
             if attempt < retries:
                 time.sleep(retry_delay)
+        except TimeoutError as e:
+            # The check above can be raced — the user can open the project in
+            # the moment between it and this command — and that lands here,
+            # looking exactly like a wedged pipe. Name the likely cause.
+            raise TimeoutError(
+                f'{e} This can mean "{abs_path.name}" is already open in '
+                "another Audacity window, which raises a modal alert that "
+                "blocks the open until it is acknowledged."
+            ) from e
     raise last_err
 
 

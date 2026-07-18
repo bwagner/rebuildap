@@ -62,3 +62,72 @@ def test_is_audacity_project():
 
 def test_is_not_audacity_project():
     assert not af.is_audacity_project(Path("bla.mp3"))
+
+
+# --- refusing to open an already-open project ------------------------------
+#
+# Opening a project that is already open raises a modal "Error Opening Project"
+# dialog that blocks OpenProject2 until acknowledged. Dismissing it is not an
+# option: Audacity exited immediately the one time it was clicked via
+# osascript. So open_project must notice the condition beforehand and send
+# nothing at all — the assertion that matters below is that the pipe is never
+# touched, since a sent command is what triggers the dialog.
+
+
+def _spy_pipe(monkeypatch):
+    """Record every pipe call open_project makes, without making any."""
+    calls = []
+    monkeypatch.setattr(af, "ping_pipe", lambda *a, **k: calls.append("ping"))
+    monkeypatch.setattr(af, "_pa_do_timed", lambda cmd, _t: calls.append(cmd) or "OK")
+    return calls
+
+
+def _fake_already_open(monkeypatch, is_open):
+    from rebuildap import audacity_present as ap
+
+    monkeypatch.setattr(ap, "project_window_open", lambda _stem: is_open)
+
+
+def test_open_project_sends_nothing_when_the_project_is_already_open(monkeypatch):
+    calls = _spy_pipe(monkeypatch)
+    _fake_already_open(monkeypatch, True)
+
+    with pytest.raises(af.ProjectAlreadyOpenError):
+        af.open_project(Path("/tmp/angie.aup3"))
+
+    assert calls == []
+
+
+def test_refusal_names_the_project_so_the_user_can_act(monkeypatch):
+    _spy_pipe(monkeypatch)
+    _fake_already_open(monkeypatch, True)
+
+    with pytest.raises(af.ProjectAlreadyOpenError, match="angie"):
+        af.open_project(Path("/tmp/angie.aup3"))
+
+
+def test_open_project_proceeds_normally_when_not_already_open(monkeypatch):
+    calls = _spy_pipe(monkeypatch)
+    _fake_already_open(monkeypatch, False)
+
+    af.open_project(Path("/tmp/angie.aup3"))
+
+    assert any("OpenProject2:" in c and "angie.aup3" in c for c in calls)
+
+
+def test_timeout_points_at_the_already_open_dialog(monkeypatch):
+    """The check can be raced: the user may open the project just after it runs.
+
+    That path still times out, so the message has to name the likely cause —
+    otherwise it is indistinguishable from a wedged pipe.
+    """
+    monkeypatch.setattr(af, "ping_pipe", lambda *a, **k: None)
+
+    def timeout(_cmd, _t):
+        raise TimeoutError("Audacity scripting pipe did not respond")
+
+    monkeypatch.setattr(af, "_pa_do_timed", timeout)
+    _fake_already_open(monkeypatch, False)
+
+    with pytest.raises(TimeoutError, match="already open"):
+        af.open_project(Path("/tmp/angie.aup3"))

@@ -331,6 +331,36 @@ Timing on 3.7.8: the dialog appears ~0.18 s after the command is sent and the
 open completes ~0.03 s after it is dismissed. The 5 s per-attempt timeout was
 never too tight — the whole budget was being spent waiting on a human.
 
+### Projects that are already open
+
+Opening a project Audacity already has open raises a different modal alert —
+**`Error Opening Project`** / "`<name>` is already open in another window."
+(buttons `OK` **and** `Cancel`) — which blocks `OpenProject2:` the same way.
+
+This one is **refused, not dismissed**. Two reasons:
+
+- **It can be pre-empted.** Audacity titles a project window with its `.aup3`
+  stem, the same fact `close_owned_window` relies on, so
+  `audacity_present.project_window_open` can see the condition *before* any
+  command is sent — and sending the command is what raises the alert.
+- **Clicking it is the one dismissal with evidence against it.** Audacity
+  **exited immediately** the one time this alert was dismissed with an
+  osascript click, with no crash report written. Cause unknown.
+
+So `open_project` raises `ProjectAlreadyOpenError` and touches nothing. Check
+mode reports it and moves on to the next project rather than aborting a sweep,
+and deliberately skips its `close_owned_window` step — that window is not ours
+to close, and it may hold edits the label files do not have.
+
+Two blind spots remain, both degrading to the old behaviour (a timeout) rather
+than to anything worse, so the timeout message now names this as a likely cause:
+
+- Window titles carry no path, so two same-named projects in different
+  directories are indistinguishable. A false positive costs a skipped project;
+  it never opens the wrong one.
+- Whether a project with *unsaved* edits still titles its window exactly with
+  its stem is unverified. If Audacity adds a dirty marker, the check misses it.
+
 ## See also
 
 - [audacity_click_label](https://github.com/bwagner/audacity_click_label)

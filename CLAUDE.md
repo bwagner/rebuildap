@@ -30,6 +30,13 @@ These shape most decisions here and are not obvious from the code.
   refuses when it can't. Refusing to close is always preferable to a wrong close.
 - **Never close an unsaved project.** Same `Save changes?` trap. The rebuild path
   closes its window only after a successful save.
+- **Never click the `Error Opening Project` alert.** Audacity exited immediately
+  the one time "`<name>` is already open in another window." was dismissed with
+  an osascript click, no crash report, cause unknown. Unlike the format-upgrade
+  dialog this one is preventable - `project_window_open` sees the condition
+  before the command is sent - so `open_project` refuses with
+  `ProjectAlreadyOpenError` instead. Do not "unify" the two dialogs behind one
+  watcher; only the upgrade dialog is safe to click.
 - **No liveness pre-check on the scripting pipe.** Opening the write end and
   closing it reads to Audacity as a client hanging up: it tears down the session
   and reopens the FIFOs, breaking the very round-trip it was meant to protect.

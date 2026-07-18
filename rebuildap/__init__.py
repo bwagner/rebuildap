@@ -2,6 +2,7 @@
 import argparse
 import difflib
 import re
+import sys
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
@@ -100,7 +101,16 @@ def check_label_age(filename: str, verbose):
 
     # TODO: export only the label tracks that are older than the audacity file
     ap.assert_audacity(verbose)
-    af.open_audio(filename, verbose)
+    try:
+        af.open_audio(filename, verbose)
+    except af.ProjectAlreadyOpenError as e:
+        # Report and move on: in a sweep across many projects one already-open
+        # project must not abort the rest. Returning here also skips the
+        # close_owned_window below — that window is not ours to close, and
+        # closing someone else's project is the very mistake the ownership
+        # check exists to prevent.
+        print(f"Skipping {filename.name}: {e}", file=sys.stderr)
+        return
 
     _check_label_age_via_getinfo(filename, outdated_candidates)
 
@@ -213,7 +223,13 @@ def rebuild(filename=None, verbose=False, label=False, check=False, save=True):
             af.make_label_track_from_file(filename)
             return
         ap.assert_audacity(verbose)
-        af.open_audio(filename, verbose)
+        try:
+            af.open_audio(filename, verbose)
+        except af.ProjectAlreadyOpenError as e:
+            # A single explicit target, unlike the sweep in check mode: report
+            # cleanly rather than with a traceback, but exit non-zero, since
+            # the work the user asked for did not happen.
+            raise SystemExit(f"{e}") from e
         if af.is_audacity_project(filename):
             if verbose:
                 print(f"exporting labels from audacity project ({Path(filename).name})")

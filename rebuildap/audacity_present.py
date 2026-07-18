@@ -249,6 +249,34 @@ def is_audacity_window_open():
     return bool(audacity_window_names())
 
 
+def project_window_open(stem: str) -> bool:
+    """True if a project window titled ``stem`` is already open.
+
+    Opening a project Audacity already has open raises a modal ``Error Opening
+    Project`` / "<name> is already open in another window." alert, which blocks
+    ``OpenProject2:`` exactly the way the format-upgrade dialog does. Unlike
+    that one this is *preventable*: Audacity titles a project window with its
+    ``.aup3`` stem — the same fact :func:`close_owned_window` relies on — so the
+    condition is visible before any command is sent. Prevention is the only
+    sanctioned handling here: Audacity **exited immediately** the one time this
+    dialog was dismissed with an osascript click, so clicking it is the one
+    dismissal with live evidence against it.
+
+    Matched exactly, not by substring, so ``angie`` is not reported open by a
+    window titled ``angie_live``.
+
+    Two known blind spots, both degrading to the old behaviour (a timeout)
+    rather than to anything worse:
+
+    - Window titles carry no path, so two same-named projects in different
+      directories are indistinguishable. A false positive costs a skipped
+      project; it never opens the wrong one.
+    - Whether a project with *unsaved* edits still titles its window exactly
+      ``stem`` is unverified. If Audacity adds a dirty marker, this misses it.
+    """
+    return stem in audacity_window_names()
+
+
 def wait_for_audacity_window(timeout: float = LAUNCH_WINDOW_TIMEOUT) -> bool:
     """Poll until Audacity has at least one window, or ``timeout`` elapses.
 
