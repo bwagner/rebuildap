@@ -190,3 +190,82 @@ def test_check_mode_skips_an_open_project_without_starting_audacity(
     rebuildap.check_label_age(str(project), verbose=False)
 
     assert "angie.aup3" in capsys.readouterr().err
+
+
+# --- not rebuilding into a window that will be thrown away -----------------
+#
+# `rebuildap song.opus` when song.aup3 already exists used to import the audio
+# and every label file, then discover the .aup3 at save time and decline to
+# overwrite — leaving the rebuilt project open and *unsaved*, which nothing can
+# safely close (Cmd-W on an unsaved project raises "Save changes?", the dialog
+# that wedges the pipe). The existing file is knowable up front, so none of that
+# work should start.
+
+
+def _forbid_audacity(monkeypatch):
+    import rebuildap
+    from rebuildap import audacity_present as ap
+
+    monkeypatch.setattr(
+        ap, "assert_audacity", lambda *a, **k: pytest.fail("Audacity must not start")
+    )
+    monkeypatch.setattr(
+        af, "open_audio", lambda *a, **k: pytest.fail("nothing must be imported")
+    )
+    return rebuildap
+
+
+def test_rebuild_refuses_when_the_aup3_already_exists(project, tmp_path, monkeypatch):
+    (tmp_path / "song.aup3").write_bytes(b"the user's working copy")
+    rebuildap = _forbid_audacity(monkeypatch)
+
+    with pytest.raises(SystemExit) as excinfo:
+        rebuildap.rebuild(str(project))
+
+    assert "song.aup3" in str(excinfo.value)
+
+
+def test_the_refusal_points_at_the_way_forward(project, tmp_path, monkeypatch):
+    (tmp_path / "song.aup3").write_bytes(b"the user's working copy")
+    rebuildap = _forbid_audacity(monkeypatch)
+
+    with pytest.raises(SystemExit) as excinfo:
+        rebuildap.rebuild(str(project))
+
+    assert "-n" in str(excinfo.value)
+
+
+def test_no_save_still_rebuilds_into_a_window(project, tmp_path, monkeypatch):
+    """With -n the user asked for a throwaway window on purpose."""
+    (tmp_path / "song.aup3").write_bytes(b"the user's working copy")
+    import rebuildap
+    from rebuildap import audacity_present as ap
+
+    ran = []
+    monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
+    monkeypatch.setattr(af, "assert_not_already_open", lambda _f: None)
+    monkeypatch.setattr(af, "open_audio", lambda *a, **k: ran.append("imported"))
+
+    rebuildap.rebuild(str(project), save=False)
+
+    assert ran == ["imported"]
+
+
+def test_an_existing_aup3_does_not_block_exporting_from_an_aup3(tmp_path, monkeypatch):
+    """`rebuildap song.aup3` reads an existing project — that is the whole point."""
+    aup3 = tmp_path / "song.aup3"
+    aup3.write_bytes(b"a project")
+    import rebuildap
+    from rebuildap import audacity_present as ap
+
+    ran = []
+    monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
+    monkeypatch.setattr(af, "assert_not_already_open", lambda _f: None)
+    monkeypatch.setattr(af, "open_audio", lambda *a, **k: ran.append("opened"))
+    monkeypatch.setattr(
+        af, "export_label_tracks_via_getinfo", lambda *a, **k: ran.append("exported")
+    )
+
+    rebuildap.rebuild(str(aup3))
+
+    assert ran == ["opened", "exported"]

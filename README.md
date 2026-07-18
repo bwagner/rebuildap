@@ -55,7 +55,10 @@ file**, not in the current directory, so `-c` has something to check and a crash
 doesn't cost you the rebuild.
 
 **An existing `.aup3` is never overwritten.** It's your working copy and may hold
-edits the label files don't have. Use `-n` / `--no-save` to skip saving entirely.
+edits the label files don't have. So rebuilding audio whose `.aup3` is already
+there stops immediately and tells you, rather than importing everything and
+discarding the result at save time. Move the existing file aside to rebuild, or
+pass `-n` / `--no-save` to rebuild into an unsaved window on purpose.
 
 Saving also nudges the label files' mtimes up to match the new `.aup3`, so `-c`
 doesn't re-diff a project it just built. No label file's *content* is touched —

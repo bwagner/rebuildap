@@ -228,6 +228,15 @@ saved-as states, since several of the workarounds above rest on it:
   `Menus`, `Preferences`, `Tracks`, `Clips`, `Envelopes`, `Labels`, `Boxes`.
   Same-stem projects in different directories are permanently indistinguishable.
 - Saving retitles the window to the new stem.
+- **An *unsaved* project built by importing audio is also titled with that
+  audio's stem** — not `Audacity`. Observed 2026-07-18 running `rebuildap -n
+  song.opus`: the window came up as `song` despite never being saved. (Only an
+  *empty* project window is titled `Audacity`.) So "title == stem" does **not**
+  imply "a saved project on disk at that path". Both current users of that
+  inference degrade safely — `project_window_open` would refuse a check as
+  "already open" when the match is really an unsaved rebuild, and
+  `close_owned_window` sees two identical titles and refuses as ambiguous — but
+  anything new relying on the title should not assume a file exists behind it.
 
 ## When an .aup3 changes on disk
 

@@ -229,6 +229,23 @@ def rebuild(filename=None, verbose=False, label=False, check=False, save=True):
                 print("importing label into open audacity project.")
             af.make_label_track_from_file(filename)
             return
+        # Rebuilding audio into a project whose .aup3 already exists throws the
+        # result away: save_project_if_absent will decline to overwrite, leaving
+        # the rebuilt project open and *unsaved* — and an unsaved project cannot
+        # be closed safely, since Cmd-W on one raises "Save changes?", the dialog
+        # that wedges the scripting pipe. The existing file is knowable up front,
+        # so none of that work is started. With -n the throwaway window is what
+        # the user asked for, so this does not apply.
+        if save and not af.is_audacity_project(filename):
+            existing = af.aup3_path_for(filename)
+            if existing.exists():
+                raise SystemExit(
+                    f"{existing.name} already exists beside {filename.name} and is "
+                    "never overwritten — it is your working copy and may hold edits "
+                    "the label files don't have. Nothing was rebuilt. Use -n to "
+                    "rebuild into an unsaved window anyway, or move the existing "
+                    f"{existing.name} aside first."
+                )
         try:
             af.assert_not_already_open(filename)
             ap.assert_audacity(verbose)
