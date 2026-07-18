@@ -114,9 +114,11 @@ def check_label_age(filename: str, verbose, precise=False):
     # Close via AppleScript Cmd-W rather than pa.do("Close:") — avoids the
     # mod-script-pipe → lib-menus.dylib crash path that bites after a few
     # open/close cycles (see README > Comments > Audacity cold-start race).
-    # open_project() retries on failure, so we don't wait here for the close
-    # to complete.
-    ap.close_audacity_window_as()
+    # Cmd-W hits the frontmost window, so close_owned_window confirms the
+    # project we opened is frontmost first; Audacity titles a project window
+    # with its .aup3 stem. If focus moved to the user's own project, it
+    # refuses and leaves both windows open rather than discarding their work.
+    ap.close_owned_window(filename.stem, verbose)
 
 
 def _check_label_age_precise(filename, outdated_candidates):
@@ -265,6 +267,22 @@ def rebuild(
                     # Keep the label files from reading as stale to -c; they
                     # are what the project was just built from.
                     af.touch_label_files(filename, saved, verbose)
+                    # Saving retitles the window to the .aup3 stem, which both
+                    # identifies it as ours and makes Cmd-W close silently.
+                    # An unsaved project would instead raise "Save changes?",
+                    # a dialog that wedges the scripting pipe — so the window
+                    # is only ever closed once it is safely on disk.
+                    ap.close_owned_window(saved.stem, verbose)
+                elif verbose:
+                    print(
+                        "Leaving the rebuilt project open: it was not saved, so "
+                        "closing it would raise a 'Save changes?' dialog."
+                    )
+            elif verbose:
+                print(
+                    "Leaving the rebuilt project open (--no-save); closing an "
+                    "unsaved project would raise a 'Save changes?' dialog."
+                )
 
     elif prerequisites_met(verbose):
         if af.get_selected_label_track_indices():

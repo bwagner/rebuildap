@@ -145,3 +145,130 @@ def test_fifo_check_gives_startup_a_grace_period(monkeypatch, tmp_path):
     # Grace not yet elapsed, so this is a plain timeout, not "module disabled".
     with pytest.raises(TimeoutError):
         ap.wait_for_audacity_ready(timeout=1.0)
+
+
+# --- window ownership -----------------------------------------------------
+#
+# Cmd-W closes whatever is frontmost, not the window rebuildap opened, so
+# closing blind can destroy a user's unsaved project and leave a "Save
+# changes?" dialog that wedges the scripting pipe. Every test below pins one
+# rule: we close only a window we can positively identify as ours.
+#
+# Titles observed on 3.7.8: a saved/opened project window is titled with the
+# .aup3 stem, while every empty project window is titled "Audacity" — hence
+# the ambiguity cases.
+
+
+def _fake_front_window(monkeypatch, sequence):
+    """Make frontmost_audacity_window_name() return each value in turn."""
+    calls = {"i": 0}
+
+    def fake():
+        i = min(calls["i"], len(sequence) - 1)
+        calls["i"] += 1
+        return sequence[i]
+
+    monkeypatch.setattr(ap, "frontmost_audacity_window_name", fake)
+
+
+def _record_calls(monkeypatch, name, result=True):
+    """Replace ap.<name> with a recorder; returns the list of call args."""
+    calls = []
+
+    def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        return result
+
+    monkeypatch.setattr(ap, name, fake)
+    return calls
+
+
+def test_closes_when_our_window_is_already_frontmost(monkeypatch):
+    _fake_window_names(monkeypatch, [["a_lucky_guy"]])
+    _fake_front_window(monkeypatch, ["a_lucky_guy"])
+    raises = _record_calls(monkeypatch, "raise_audacity_window_as")
+    closes = _record_calls(monkeypatch, "close_audacity_window_as")
+
+    assert ap.close_owned_window("a_lucky_guy") is True
+    assert len(closes) == 1
+    assert raises == [], "no need to raise a window that is already frontmost"
+
+
+def test_raises_our_window_before_closing_when_focus_moved(monkeypatch):
+    """The user clicked another window: raise ours, verify, then close."""
+    _fake_window_names(monkeypatch, [["a_lucky_guy", "someone_elses_song"]])
+    _fake_front_window(monkeypatch, ["someone_elses_song", "a_lucky_guy"])
+    raises = _record_calls(monkeypatch, "raise_audacity_window_as")
+    closes = _record_calls(monkeypatch, "close_audacity_window_as")
+
+    assert ap.close_owned_window("a_lucky_guy") is True
+    assert [c[0][0] for c in raises] == ["a_lucky_guy"]
+    assert len(closes) == 1
+
+
+def test_refuses_to_close_when_our_window_cannot_be_raised(monkeypatch):
+    """AXRaise silently failed — closing now would hit the user's window."""
+    _fake_window_names(monkeypatch, [["a_lucky_guy", "someone_elses_song"]])
+    _fake_front_window(monkeypatch, ["someone_elses_song", "someone_elses_song"])
+    _record_calls(monkeypatch, "raise_audacity_window_as")
+    closes = _record_calls(monkeypatch, "close_audacity_window_as")
+
+    assert ap.close_owned_window("a_lucky_guy") is False
+    assert closes == [], "must not send Cmd-W to a window we do not own"
+
+
+def test_refuses_to_close_an_ambiguous_title(monkeypatch):
+    """Two windows share our title, so 'ours' is not identifiable."""
+    _fake_window_names(monkeypatch, [["Audacity", "Audacity"]])
+    _fake_front_window(monkeypatch, ["Audacity"])
+    closes = _record_calls(monkeypatch, "close_audacity_window_as")
+
+    assert ap.close_owned_window("Audacity") is False
+    assert closes == []
+
+
+def test_refuses_to_close_when_our_window_is_gone(monkeypatch):
+    """User already closed it; a blind Cmd-W would hit whatever replaced it."""
+    _fake_window_names(monkeypatch, [["someone_elses_song"]])
+    _fake_front_window(monkeypatch, ["someone_elses_song"])
+    closes = _record_calls(monkeypatch, "close_audacity_window_as")
+
+    assert ap.close_owned_window("a_lucky_guy") is False
+    assert closes == []
+
+
+def test_refusal_explains_itself(monkeypatch, capsys):
+    _fake_window_names(monkeypatch, [["Audacity", "Audacity"]])
+    _fake_front_window(monkeypatch, ["Audacity"])
+    _record_calls(monkeypatch, "close_audacity_window_as")
+
+    ap.close_owned_window("Audacity", verbose=True)
+    err = capsys.readouterr().err.lower()
+    assert "audacity" in err and "left open" in err
+
+
+def test_refuses_to_close_when_frontmost_is_unreadable(monkeypatch):
+    """osascript failed, so we cannot confirm ownership — do nothing."""
+    _fake_window_names(monkeypatch, [["a_lucky_guy"]])
+    _fake_front_window(monkeypatch, [None, None])
+    _record_calls(monkeypatch, "raise_audacity_window_as")
+    closes = _record_calls(monkeypatch, "close_audacity_window_as")
+
+    assert ap.close_owned_window("a_lucky_guy") is False
+    assert closes == []
+
+
+# --- frontmost-window parsing ---------------------------------------------
+
+
+def test_frontmost_window_name_is_stripped(monkeypatch):
+    _fake_osascript(monkeypatch, stdout="a_lucky_guy\n")
+    assert ap.frontmost_audacity_window_name() == "a_lucky_guy"
+
+
+def test_frontmost_window_name_is_none_when_there_are_no_windows(monkeypatch):
+    """System Events raises 'Invalid index' rather than returning empty."""
+    _fake_osascript(
+        monkeypatch, returncode=1, stderr="Can’t get window 1. Invalid index. (-1719)"
+    )
+    assert ap.frontmost_audacity_window_name() is None

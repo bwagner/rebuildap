@@ -200,14 +200,35 @@ not-yet-initialized pointer and Audacity crashes.
    start), add a short settling delay before returning so menu init can
    finish. Eliminates the cold-start (~5 s uptime) crash.
 
-2. **Close via AppleScript Cmd-W instead of `Close:`** (check_label_age
-   uses `audacity_present.close_audacity_window_as`). Repeated
+2. **Close via AppleScript Cmd-W instead of `Close:`** (via
+   `audacity_present.close_owned_window`). Repeated
    `pa.do("Close:")` cycles across many projects eventually hit the same
    menu-dispatch null-deref even on a "warm" Audacity (observed: uptime
    ~327 s after a handful of open/close cycles). Sending Cmd-W via
    AppleScript routes the window close through AppKit's event dispatch
    rather than the scripting pipe's menu-command path, sidestepping the
    buggy path.
+
+### Which window gets closed
+
+Cmd-W closes whatever window is *frontmost*, which is not necessarily the
+one `rebuildap` opened. If focus moved in the meantime — you clicked your
+own project, or a dialog stole it — a blind Cmd-W would close your window,
+discard unsaved work, and leave a `Save changes?` dialog that then wedges
+the scripting pipe.
+
+So `rebuildap` never closes blind. Audacity titles a saved or opened
+project window with its `.aup3` stem, and `close_owned_window` closes a
+window only after confirming that title is frontmost — raising it first if
+focus moved. If the window is gone, or two windows share the title (every
+*empty* project window is titled `Audacity`), it refuses, explains why on
+stderr, and leaves everything open. A stray window costs nothing; closing
+the wrong one costs your work.
+
+For the same reason a rebuilt project's window is closed only once it has
+been **saved**: closing an unsaved project raises `Save changes?`. With
+`-n` / `--no-save`, or when an `.aup3` already exists, the window is left
+open on purpose.
 
 These are workarounds, not fixes — the underlying bug is in Audacity and
 should be reported upstream. But together they're sufficient to run

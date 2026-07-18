@@ -217,8 +217,9 @@ def bring_audacity_window_to_front_as() -> bool:
 def close_audacity_window_as() -> bool:
     """Close Audacity's frontmost window (Cmd-W). Returns False if osascript failed.
 
-    Note this closes whatever is frontmost, which is not necessarily the
-    window the caller opened.
+    Closes whatever is frontmost, which is not necessarily the window the
+    caller opened — so this is the raw primitive, not the thing to call.
+    Use :func:`close_owned_window`, which confirms ownership first.
     """
     script = """
     tell application "Audacity" to activate
@@ -228,6 +229,100 @@ def close_audacity_window_as() -> bool:
     """
     ok, _ = run_osascript(script, "closing the Audacity window (Cmd-W)")
     return ok
+
+
+def frontmost_audacity_window_name() -> str | None:
+    """Title of Audacity's frontmost window, or ``None`` if there isn't one.
+
+    With no windows open, System Events does not return an empty result — it
+    errors with ``Can't get window 1 ... Invalid index. (-1719)``. That shares
+    an error code with the Accessibility refusal that ``run_osascript``
+    diagnoses, so both surface here as ``None`` and callers must treat it as
+    "ownership unknown" rather than "no window".
+    """
+    script = """
+    tell application "System Events"
+        tell process "Audacity" to return name of front window
+    end tell
+    """
+    ok, out = run_osascript(script, "reading Audacity's frontmost window")
+    if not ok or not out.strip():
+        return None
+    return out.strip()
+
+
+def raise_audacity_window_as(title: str) -> bool:
+    """Bring the Audacity window titled ``title`` to the front via AXRaise.
+
+    Returns whether the AppleScript succeeded, which is *not* the same as the
+    window actually being frontmost afterwards — callers must re-read
+    :func:`frontmost_audacity_window_name` to confirm.
+    """
+    script = f"""
+    tell application "Audacity" to activate
+    tell application "System Events"
+        tell process "Audacity"
+            perform action "AXRaise" of (first window whose name is "{title}")
+        end tell
+    end tell
+    """
+    ok, _ = run_osascript(script, f"raising the Audacity window {title!r}")
+    return ok
+
+
+def close_owned_window(title: str, verbose: bool = False) -> bool:
+    """Close the Audacity window titled ``title``, but only if it is provably ours.
+
+    Cmd-W closes whatever is frontmost. If focus has moved — the user clicked
+    their own project, a dialog stole it — a blind Cmd-W closes *their* window,
+    discarding unsaved work and raising a "Save changes?" dialog that then
+    wedges the scripting pipe. This is the only known data-loss path in
+    rebuildap, so the rule is: confirm the frontmost window is ours, or do
+    nothing.
+
+    ``title`` identifies the window because Audacity titles a saved or opened
+    project with its .aup3 stem. Empty projects are all titled ``Audacity``,
+    which is why a duplicated title counts as unidentifiable rather than a
+    match.
+
+    Returns True only if Cmd-W was actually sent. Refusing leaks a window,
+    which is the deliberately cheaper failure: a stray window costs nothing,
+    a wrong Cmd-W costs the user's work.
+    """
+
+    def refuse(reason: str) -> bool:
+        print(
+            f"Not closing the Audacity window {title!r}: {reason}. "
+            "No window was closed; left open rather than risk closing the "
+            "wrong one.",
+            file=sys.stderr,
+        )
+        return False
+
+    matches = [n for n in audacity_window_names() if n == title]
+    if not matches:
+        return refuse("it is no longer open")
+    if len(matches) > 1:
+        return refuse(f"{len(matches)} windows share that title")
+
+    front = frontmost_audacity_window_name()
+    if front != title:
+        if front is None and verbose:
+            print(
+                "Could not read Audacity's frontmost window; attempting to raise "
+                f"{title!r} anyway.",
+                file=sys.stderr,
+            )
+        raise_audacity_window_as(title)
+        front = frontmost_audacity_window_name()
+        if front != title:
+            return refuse(
+                f"it could not be brought to the front (frontmost: {front!r})"
+            )
+
+    if verbose:
+        print(f"Closing the Audacity window {title!r}.")
+    return close_audacity_window_as()
 
 
 def _probe_tracks_with_timeout(timeout_per_probe: float):
