@@ -292,7 +292,7 @@ Each now reports what is actually wrong:
   so opening a second one adds no new *title*. New-window detection compares
   window counts as well as titles.
 
-`test_audacity_present.py` covers all three by faking the environment, so no
+`tests/test_audacity_present.py` covers all three by faking the environment, so no
 running Audacity is required.
 
 ## See also
