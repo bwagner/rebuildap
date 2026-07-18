@@ -702,7 +702,8 @@ def redo():
 #
 # GetInfo: Type=Labels returns a JSON payload containing all label tracks in a
 # single non-interactive call, which sidesteps the save-dialog of
-# `ExportLabels:`. The precision trade-off is documented in README.
+# `ExportLabels:`. The precision trade-off is documented in
+# docs/label-export.md.
 
 _OK_MARKERS = ("\nBatchCommand finished: OK\n", "\nBatchCommand finshed: OK\n")
 

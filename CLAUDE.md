@@ -18,8 +18,8 @@ These shape most decisions here and are not obvious from the code.
 - **Audacity is a hostile dependency.** It crashes on documented paths, and its
   scripting pipe can silently swallow commands. Much of this codebase is
   workarounds, each one deliberate. Before "simplifying" any of them, read
-  `~/.claude/audacity.md` and the project memory - several obvious-looking
-  cleanups have been tried and reverted.
+  `docs/audacity-quirks.md`, `~/.claude/audacity.md` and the project memory -
+  several obvious-looking cleanups have been tried and reverted.
 
 ## Rules with teeth
 

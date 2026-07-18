@@ -559,8 +559,8 @@ def wait_for_audacity_ready(
 
     Raises ``ScriptPipeUnavailableError`` if the FIFOs never appear (module
     disabled — waiting cannot help), or ``TimeoutError`` if they exist but
-    nothing answers within ``timeout`` seconds. See README > Comments >
-    Audacity cold-start race.
+    nothing answers within ``timeout`` seconds. See
+    ``docs/audacity-quirks.md`` > Audacity cold-start race.
     """
     start = time.monotonic()
     delay = POLL_DELAY_INITIAL

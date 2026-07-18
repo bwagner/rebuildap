@@ -123,7 +123,7 @@ def check_label_age(filename: str, verbose):
 
     # Close via AppleScript Cmd-W rather than pa.do("Close:") — avoids the
     # mod-script-pipe → lib-menus.dylib crash path that bites after a few
-    # open/close cycles (see README > Comments > Audacity cold-start race).
+    # open/close cycles (see docs/audacity-quirks.md > Audacity cold-start race).
     # Cmd-W hits the frontmost window, so close_owned_window confirms the
     # project we opened is frontmost first; Audacity titles a project window
     # with its .aup3 stem. If focus moved to the user's own project, it
