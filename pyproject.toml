@@ -41,6 +41,12 @@ extend-select = ["I"]
 rebuildap = "rebuildap:main"
 
 [tool.pytest.ini_options]
+# The audacity-marked tests need a live GUI Audacity, so they are deselected by
+# default; run them with `uv run pytest -m audacity`.
+addopts = "-m 'not audacity'"
+markers = [
+    "audacity: needs a running Audacity, a GUI login session and Accessibility permission",
+]
 testpaths = [
     "tests",
 ]

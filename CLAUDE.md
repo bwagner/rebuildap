@@ -39,8 +39,12 @@ These shape most decisions here and are not obvious from the code.
 
 ## Working here
 
-- `uv run pytest` - full suite. `uv run ruff check --fix . && uv run ruff format .`
-  before committing; pre-commit runs both anyway.
+- `uv run pytest` - the offline suite. Tests marked `audacity` drive a real
+  Audacity and are deselected by default; `uv run pytest -m audacity` runs them
+  and needs a GUI login session plus Accessibility. They had never run before
+  2026-07-18, so treat failures there as un-vetted, not as regressions.
+  `uv run ruff check --fix . && uv run ruff format .` before committing;
+  pre-commit runs both anyway.
 - `uv run rebuildap ...` runs the **working tree**. The `rebuildap` on PATH is a
   separate installed copy and can be silently stale - see `~/.claude/uv.md`.
 - Timing constants in `audacity_present.py` were measured, not guessed (window at

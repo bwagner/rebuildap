@@ -1,7 +1,22 @@
-#!/usr/bin/env python
+"""Tests that drive a real, running Audacity.
+
+Marked ``audacity`` and deselected by default (see ``addopts`` in
+``pyproject.toml``), so a plain ``uv run pytest`` stays offline. Run them with:
+
+    uv run pytest -m audacity
+
+Requirements, none of which CI can provide: macOS with an unlocked GUI login
+session, Audacity running with ``mod-script-pipe`` enabled, and Accessibility
+permission granted to the calling terminal.
+
+History: these lived in the repo-root ``test.py`` and had never actually run --
+the filename did not match pytest's ``test_*.py`` glob, so nothing collected
+them. Every function they reference still exists, but treat failures here as
+un-vetted rather than as regressions.
+"""
+
 import random
 import time
-from pathlib import Path
 
 import pyaudacity as pa
 import pytest
@@ -9,10 +24,7 @@ import pytest
 from rebuildap import audacity_funcs as af
 from rebuildap import audacity_present as ap
 
-"""
-NOTE: You need to grant PyCharm the right to control your computer
-in System Preferences > Security & Privacy > Accessibility
-"""
+pytestmark = pytest.mark.audacity
 
 AUDIO_TRACK_1_NAME = "First Audio Track"
 AUDIO_TRACK_2_NAME = "Second Audio Track"
@@ -22,11 +34,16 @@ LABEL_TRACK_2_NAME = "Second Label Track"
 
 SLEEP_BETWEEN_TESTS = 0.3
 
+NOISE_START = "1"
+NOISE_END = "3"
+NOISE_TYPE = "Brownian"
+NOISE_AMPLITUDE = "0.8"
+
 
 def create_audio_track(track_name: str = "Audio Track"):
     pa.do("NewMonoTrack")
-    pa.do('SelectTime: Start="1" End="3"')
-    pa.do('Noise: Type="Brownian" Amplitude="0.8"')
+    pa.do(f'SelectTime: Start="{NOISE_START}" End="{NOISE_END}"')
+    pa.do(f'Noise: Type="{NOISE_TYPE}" Amplitude="{NOISE_AMPLITUDE}"')
     pa.do(f'SetTrack: Name="{track_name}"')
 
 
@@ -78,7 +95,12 @@ def four_tracks_sel(four_tracks):
 def setup():
     ap.assert_audacity(False)
     yield
-    ap.close_audacity_window_as()
+    # Deliberately does NOT close the window. The only window this fixture can
+    # have created is an empty project, and Audacity titles *every* empty
+    # project "Audacity" -- so close_owned_window cannot prove ownership and
+    # would refuse anyway. A bare Cmd-W is forbidden (see CLAUDE.md): it closes
+    # whatever is frontmost, which may be the user's own project. Leaking a
+    # window is the cheaper failure.
 
 
 @pytest.fixture(autouse=True)
@@ -105,8 +127,8 @@ def test_audio_track(audio_track):
     assert af.is_track_focused(track)
     assert af.is_track_selected(track)
     assert af.is_audio_track(track)
-    assert af.get_track_start(track) == 1
-    assert af.get_track_end(track) == 3
+    assert af.get_track_start(track) == int(NOISE_START)
+    assert af.get_track_end(track) == int(NOISE_END)
     assert af.get_track_pan(track) == 0
     assert af.get_track_volume(track) == 1
     assert af.get_track_channels(track) == 1
@@ -285,77 +307,6 @@ def test_focus_track2(four_tracks):
     assert af.get_track_name(af.get_focused_tracks()[0]) == LABEL_TRACK_2_NAME
 
 
-def map_strings(obj, func):
-    """
-    Recursively traverse any nested structure (lists, tuples, dicts, sets)
-    and apply `func` to every string encountered, reproducing the structure.
-    """
-    if isinstance(obj, str):
-        return func(obj)
-    elif isinstance(obj, dict):
-        return {map_strings(k, func): map_strings(v, func) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [map_strings(item, func) for item in obj]
-    elif isinstance(obj, tuple):
-        return tuple(map_strings(item, func) for item in obj)
-    elif isinstance(obj, set):
-        return {map_strings(item, func) for item in obj}
-    else:
-        return obj
-
-
-@pytest.mark.parametrize(
-    "identifiers, expected",
-    map_strings(
-        [
-            # Test case 1: Basic ordering with one match per identifier
-            (
-                ["part_001", "chord_A", "lyrics_01", "bar_10", "beat_100"],
-                ["part_001", "chord_A", "lyrics_01", "bar_10", "beat_100"],
-            ),
-            # Test case 2: No matches, so unrecognized items go before bars and beats
-            (
-                ["alpha", "beta", "gamma", "bar_10", "beat_100"],
-                ["alpha", "beta", "gamma", "bar_10", "beat_100"],
-            ),
-            # Test case 3: Bars and beats should always be at the end, even if others are recognized
-            (
-                ["chord_A", "lyrics_01", "random", "beat_100", "bar_10"],
-                ["chord_A", "lyrics_01", "random", "bar_10", "beat_100"],
-            ),
-            # Test case 4: Bars and beats should still be ordered at the end with unrecognized before them
-            (
-                ["part_001", "random_label", "beat_100", "bar_10"],
-                ["part_001", "random_label", "bar_10", "beat_100"],
-            ),
-            # Test case 5: No recognized labels, but bars and beats should still be at the end
-            (
-                ["random_01", "random_02", "bar_10", "beat_100"],
-                ["random_01", "random_02", "bar_10", "beat_100"],
-            ),
-            # Test case 6: Only bars and beats should be sorted properly
-            (["beat_100", "bar_10"], ["bar_10", "beat_100"]),
-            # Test case 7: Mixed ordering with recognized and unrecognized labels
-            (
-                ["beat_100", "part_002", "chord_B", "random_label", "bar_10"],
-                ["part_002", "chord_B", "random_label", "bar_10", "beat_100"],
-            ),
-        ],
-        Path,
-    ),
-)
-def test_reorder_labels(identifiers, expected):
-    assert af.reorder_labels(identifiers) == expected
-
-
-def test_is_audacity_project():
-    assert af.is_audacity_project(Path("bla.aup3"))
-
-
-def test_is_not_audacity_project():
-    assert not af.is_audacity_project(Path("bla.mp3"))
-
-
 def test_focus(four_tracks):
     create_audio_track()
     create_audio_track()
@@ -367,11 +318,3 @@ def test_focus(four_tracks):
         j = random.randrange(af.get_track_count())
         af.focus_track(j)
         assert af.get_focused_track_index() == j
-
-
-def main():
-    pass
-
-
-if __name__ == "__main__":
-    main()
