@@ -927,6 +927,55 @@ def is_audacity_project(filename: Path) -> bool:
     return filename.name.lower().endswith(f".{AUDACITY_EXTENSION}")
 
 
+def aup3_path_for(audio_path: Path) -> Path:
+    """Where the .aup3 for ``audio_path`` belongs: beside the audio, same stem.
+
+    Derived from the audio file, never from the cwd, so running rebuildap from
+    another directory still writes into the project.
+    """
+    abs_path = audio_path.expanduser().resolve()
+    return abs_path.parent / f"{abs_path.stem}.{AUDACITY_EXTENSION}"
+
+
+def save_project_if_absent(audio_path: Path, verbose: bool = False) -> Path | None:
+    """Save the rebuilt project next to its audio, unless an .aup3 already exists.
+
+    Returns the path written, or None if one was already there.
+
+    Never overwrites: an existing .aup3 is the user's working copy and may hold
+    edits that are not in the label files. (``pa.save`` would not merely
+    overwrite it — it unlinks the target first to dodge Audacity's confirm
+    dialog — so guarding here matters.)
+    """
+    target = aup3_path_for(audio_path)
+    if target.exists():
+        if verbose:
+            print(f"{target.name} already exists; not overwriting.")
+        return None
+    pa.save(str(target), add_to_history=False, allow_overwrite=False)
+    if verbose:
+        print(f"Saved {target}")
+    return target
+
+
+def touch_label_files(audio_path: Path, reference: Path, verbose: bool = False) -> None:
+    """Mark the label files as at least as new as ``reference`` (the saved .aup3).
+
+    ``-c`` treats any label file older than the .aup3 as possibly stale and
+    re-exports it to diff. Straight after a rebuild the two provably agree — the
+    project was just built from those very files — so without this every later
+    ``-c`` would open, export and diff the project forever, finding nothing.
+    Check mode only rewrites label files when content diverges, so the condition
+    never clears on its own.
+    """
+    stamp = reference.stat().st_mtime
+    for label_file in create_labels_glob(audio_path):
+        if label_file.stat().st_mtime < stamp:
+            os.utime(label_file, (stamp, stamp))
+            if verbose:
+                print(f"Touched {label_file.name} to match {reference.name}")
+
+
 def create_labels_glob(filename: Path) -> Generator[Path]:
     """
     Finds all label files associated with the audio

@@ -145,7 +145,10 @@ def _check_label_age_precise(filename, outdated_candidates):
 def _check_label_age_via_getinfo(filename, outdated_candidates):
     """Non-interactive path: compare versioned files against GetInfo content in memory."""
     contents = af.get_label_tracks_content_via_getinfo()
-    out_dir = Path.cwd()
+    # Beside the project being checked, not in the cwd: `rebuildap -c
+    # /elsewhere/song.aup3` used to scatter export artifacts wherever it
+    # happened to be run from.
+    out_dir = Path(filename).expanduser().resolve().parent
     for label_file in outdated_candidates:
         short_name = label_file.stem.replace(f"_{Path(filename.name).stem}", "")
         expected = contents.get(short_name)
@@ -227,7 +230,9 @@ def prerequisites_met(verbose: bool) -> bool:
     return True
 
 
-def rebuild(filename=None, verbose=False, label=False, check=False, precise=False):
+def rebuild(
+    filename=None, verbose=False, label=False, check=False, precise=False, save=True
+):
     if check:
         check_label_age(filename, verbose, precise=precise)
     elif filename:
@@ -254,6 +259,12 @@ def rebuild(filename=None, verbose=False, label=False, check=False, precise=Fals
                 print(
                     f"rebuilt audacity project from audio and labels ({Path(filename).name})"
                 )
+            if save:
+                saved = af.save_project_if_absent(filename, verbose)
+                if saved is not None:
+                    # Keep the label files from reading as stale to -c; they
+                    # are what the project was just built from.
+                    af.touch_label_files(filename, saved, verbose)
 
     elif prerequisites_met(verbose):
         if af.get_selected_label_track_indices():
@@ -296,13 +307,30 @@ def main():
         ),
     )
     parser.add_argument(
+        "-n",
+        "--no-save",
+        action="store_true",
+        help=(
+            "Don't save the rebuilt project as <audio-stem>.aup3 beside the "
+            "audio file. By default it is saved when no .aup3 exists yet; an "
+            "existing one is never overwritten."
+        ),
+    )
+    parser.add_argument(
         "-V",
         "--version",
         action="version",
         version=get_version_info(_pkg_version("rebuildap")),
     )
     args = parser.parse_args()
-    rebuild(args.filename, args.verbose, args.label, args.check, args.precise)
+    rebuild(
+        args.filename,
+        args.verbose,
+        args.label,
+        args.check,
+        args.precise,
+        save=not args.no_save,
+    )
 
 
 if __name__ == "__main__":

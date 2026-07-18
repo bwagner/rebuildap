@@ -2,39 +2,83 @@
 
 import errno
 import os
+import select
 import subprocess
 import sys
-import threading
 import time
+from collections.abc import Sequence
 
 import psutil
-import pyaudacity as pa
 
 from . import audacity_funcs as af
 
 _SCRIPT_PIPE_TO = f"/tmp/audacity_script_pipe.to.{os.getuid()}"
+_SCRIPT_PIPE_FROM = f"/tmp/audacity_script_pipe.from.{os.getuid()}"
+
+RESPONSE_TERMINATOR = b"BatchCommand finished"  # marks a complete pipe response
+READ_CHUNK_BYTES = 65536  # per-read size when draining the from-pipe
+SELECT_INTERVAL = 0.25  # select() slice while waiting for a response
+REOPEN_RETRY_INTERVAL = 0.1  # retry pause while Audacity reopens the FIFOs
+
+# Readiness/probe tuning. See wait_for_audacity_ready and assert_audacity_window.
+# A new project answers the pipe ~3.4s after Cmd-N on 3.7.8 (window at ~2.7s),
+# so the readiness budget has to comfortably clear that plus cold-start jitter.
+READY_TIMEOUT = 20.0  # overall budget for the end-to-end readiness probe
+PROBE_TIMEOUT_MAX = 3.0  # hard cap per individual GetInfo round-trip
+PROBE_TIMEOUT_MIN = 0.5  # never give a probe less than this
+POLL_DELAY_INITIAL = 0.5  # first backoff sleep between probes
+POLL_DELAY_MAX = 2.0  # backoff ceiling
+POLL_DELAY_FACTOR = 1.5  # exponential backoff multiplier
+COLD_START_SETTLE = 1.5  # menu-subsystem settling delay after a cold start
+LAUNCH_WINDOW_TIMEOUT = 20.0  # wait for a window after launching Audacity
+NEW_WINDOW_TIMEOUT = 15.0  # wait for the Cmd-N project window to appear
+WINDOW_POLL_INTERVAL = 0.5  # polling interval while waiting for a window
+DRAIN_PREVIEW_BYTES = 200  # stale-byte preview length in the drain diagnostic
+SCRIPT_PIPE_GRACE = 8.0  # allow this long for the FIFOs to be created at startup
+
+MOD_SCRIPT_PIPE_HINT = (
+    "Audacity's scripting FIFOs were never created, which means the "
+    "mod-script-pipe module is not active. Enable it under "
+    "Preferences > Modules > mod-script-pipe (set it to 'Enabled') and "
+    "restart Audacity. See "
+    "https://manual.audacityteam.org/man/scripting.html"
+)
+
+ACCESSIBILITY_HINT = (
+    "osascript was refused control of Audacity. Grant your terminal (or the "
+    "app running rebuildap) Accessibility permission under System Settings > "
+    "Privacy & Security > Accessibility. Note that rebuildap drives Audacity "
+    "via GUI keystrokes, so it needs a real, unlocked login session."
+)
+# osascript error fragments that mean "no accessibility permission", not "no window".
+_ACCESSIBILITY_ERROR_MARKERS = ("assistive access", "-1719", "-1743", "not authorized")
 
 
-def _is_script_pipe_listening() -> bool:
-    """Return True iff mod-script-pipe has the 'to-Audacity' FIFO open for reading.
+class ScriptPipeUnavailableError(RuntimeError):
+    """mod-script-pipe is not active, so scripting can never work.
 
-    Uses a non-blocking write open: on Unix, opening a FIFO with
-    ``O_WRONLY | O_NONBLOCK`` succeeds only if a reader is currently
-    attached; otherwise the kernel returns ENXIO immediately. Costs <1 ms
-    and doesn't involve any round-trip to Audacity.
-
-    Note: a True result means the FIFO has a reader, not that Audacity is
-    actually progressing commands (a wedged mod-script-pipe may still hold
-    the fd). Use as a cheap pre-check; follow with an end-to-end probe.
+    Distinct from a timeout: waiting longer cannot help — the user has to
+    enable the module and restart Audacity.
     """
-    try:
-        fd = os.open(_SCRIPT_PIPE_TO, os.O_WRONLY | os.O_NONBLOCK)
-        os.close(fd)
-        return True
-    except OSError as e:
-        if e.errno in (errno.ENXIO, errno.ENOENT):
-            return False
-        raise
+
+
+def script_pipe_exists() -> bool:
+    """True if both scripting FIFOs exist on disk.
+
+    mod-script-pipe creates them at Audacity startup, so their absence means
+    the module is disabled (or Audacity has not got far enough into launching
+    yet — hence SCRIPT_PIPE_GRACE before we conclude anything).
+    """
+    return os.path.exists(_SCRIPT_PIPE_TO) and os.path.exists(_SCRIPT_PIPE_FROM)
+
+
+# Deliberately no "is the pipe listening?" helper here. Probing readiness by
+# opening the write end with O_WRONLY | O_NONBLOCK and closing it looks free,
+# but Audacity reads that as a client connecting and hanging up: it ends the
+# session and reopens both FIFOs, so the pre-check breaks the very round-trip
+# it was meant to protect. A True result wouldn't have meant much anyway — a
+# project-less Audacity holds the FIFO open and still answers nothing. Use
+# _probe_tracks_with_timeout, which is end-to-end and self-limiting.
 
 
 """
@@ -44,22 +88,88 @@ audacity_present.py
 """
 
 
+def run_osascript(script: str, what: str) -> tuple[bool, str]:
+    """Run an AppleScript, reporting failure instead of swallowing it.
+
+    Every GUI action here — activating Audacity, Cmd-N, Cmd-W, listing
+    windows — goes through osascript, and each one fails silently if the
+    caller lacks Accessibility permission or there is no GUI login session.
+    That turns a permissions problem into an unexplained timeout much later,
+    so failures are always announced on stderr.
+
+    Returns ``(ok, stdout)``.
+    """
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    if result.returncode != 0:
+        err = result.stderr.strip()
+        print(f"[osascript] {what} failed: {err}", file=sys.stderr)
+        if any(m in err for m in _ACCESSIBILITY_ERROR_MARKERS):
+            print(ACCESSIBILITY_HINT, file=sys.stderr)
+        return False, ""
+    return True, result.stdout.strip()
+
+
+def audacity_window_names() -> list[str]:
+    """Return the titles of Audacity's open windows (empty list if none).
+
+    Note that a title alone does not tell us whether a window is a usable
+    *project*: a lone ``About Audacity`` dialog counts as an open window but
+    has no project behind it, so the scripting pipe will accept commands and
+    never answer. Use :func:`_probe_project_empty` to decide usability.
+
+    An osascript failure also yields an empty list — indistinguishable here
+    from "no windows", which is why run_osascript reports it on stderr.
+    """
+    script = """
+    tell application "System Events"
+        return name of windows of process "Audacity"
+    end tell
+    """
+    ok, out = run_osascript(script, "listing Audacity windows")
+    if not ok:
+        return []
+    return [n.strip() for n in out.split(",") if n.strip()]
+
+
 def is_audacity_window_open():
     """
     Checks whether Audacity window is open.
     """
-    script = """
-    tell application "System Events"
-        set audacityWindows to (name of windows of process "Audacity")
-        if length of audacityWindows is greater than 0 then
-            return true
-        else
-            return false
-        end if
-    end tell
+    return bool(audacity_window_names())
+
+
+def wait_for_audacity_window(timeout: float = LAUNCH_WINDOW_TIMEOUT) -> bool:
+    """Poll until Audacity has at least one window, or ``timeout`` elapses.
+
+    Purely AppleScript-based, so it works before the scripting pipe is usable
+    — which matters because the pipe cannot answer until a project window
+    exists.  Returns True if a window appeared.
     """
-    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
-    return result.stdout.strip() == "true"
+    return wait_for_new_audacity_window([], timeout)
+
+
+def wait_for_new_audacity_window(
+    before: Sequence[str], timeout: float = NEW_WINDOW_TIMEOUT
+) -> bool:
+    """Poll until Audacity gains a window relative to ``before``.
+
+    Checking for a *new* window rather than merely "any window" matters: with a
+    stray ``About Audacity`` dialog on screen, "any window" is already true and
+    would mask a Cmd-N that never landed.
+
+    Counts as well as titles, because an empty project window is titled
+    ``Audacity`` — so opening a second one adds no new *title*, and comparing
+    title sets alone would miss it.
+    """
+    before_count = len(before)
+    before_titles = set(before)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        names = audacity_window_names()
+        if len(names) > before_count or (set(names) - before_titles):
+            return True
+        time.sleep(WINDOW_POLL_INTERVAL)
+    return False
 
 
 def is_audacity_running():
@@ -83,10 +193,11 @@ def start_audacity():
     os.system('open -a "Audacity"')
 
 
-def bring_audacity_window_to_front_as():
-    """
-    Brings Audacity window to the front and opens new project
-    using AppleScript.
+def bring_audacity_window_to_front_as() -> bool:
+    """Bring Audacity to the front and open a new project (Cmd-N).
+
+    Returns False if the AppleScript itself failed — typically missing
+    Accessibility permission, in which case no keystroke was ever delivered.
     """
     script = """
     tell application "Audacity"
@@ -99,17 +210,24 @@ def bring_audacity_window_to_front_as():
         keystroke "n" using {command down}
     end tell
     """
-    subprocess.run(["osascript", "-e", script])
+    ok, _ = run_osascript(script, "opening a new Audacity project (Cmd-N)")
+    return ok
 
 
-def close_audacity_window_as():
+def close_audacity_window_as() -> bool:
+    """Close Audacity's frontmost window (Cmd-W). Returns False if osascript failed.
+
+    Note this closes whatever is frontmost, which is not necessarily the
+    window the caller opened.
+    """
     script = """
     tell application "Audacity" to activate
     tell application "System Events"
         keystroke "w" using command down
     end tell
     """
-    subprocess.run(["osascript", "-e", script])
+    ok, _ = run_osascript(script, "closing the Audacity window (Cmd-W)")
+    return ok
 
 
 def _probe_tracks_with_timeout(timeout_per_probe: float):
@@ -117,29 +235,76 @@ def _probe_tracks_with_timeout(timeout_per_probe: float):
 
     Returns the parsed tracks list on success, or ``None`` on failure/timeout.
 
-    Why threading? ``pa.do()`` opens Audacity's FIFO for writing, which
-    **blocks indefinitely** on Unix until mod-script-pipe has opened the
-    read side. A plain ``try/except`` around ``pa.do()`` cannot time out
-    during cold start. We run the probe in a daemon thread and give up on
-    it after ``timeout_per_probe`` seconds. A stuck thread is acceptable
-    — daemon threads die with the process.
+    Talks to the FIFOs directly rather than going through ``pa.do()`` in a
+    daemon thread. That older approach leaked: on timeout the thread stayed
+    blocked in ``read_pipe.readline()`` while holding *both* pipes open, so it
+    later consumed the response belonging to the next probe. Once one probe
+    timed out, every subsequent probe in the same process failed — which is
+    precisely the state a window-less Audacity puts us in. Here every fd is
+    closed on the way out, so a timeout costs nothing but the wait.
+
+    Ordering matters: Audacity opens the to-pipe for reading first and only
+    then the from-pipe for writing, so we must open the to-pipe for *writing*
+    first or the two sides deadlock.
     """
-    result: dict = {"tracks": None}
+    deadline = time.monotonic() + timeout_per_probe
+    wfd = rfd = None
+    try:
+        # O_NONBLOCK: ENXIO instead of blocking forever when no reader is attached.
+        # Closing our write end makes Audacity see EOF and reopen both FIFOs, so
+        # right after a previous probe there is a brief readerless gap. Retry
+        # across it rather than reporting the pipe dead.
+        while True:
+            try:
+                wfd = os.open(_SCRIPT_PIPE_TO, os.O_WRONLY | os.O_NONBLOCK)
+                break
+            except OSError as e:
+                if e.errno not in (errno.ENXIO, errno.ENOENT):
+                    raise
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(REOPEN_RETRY_INTERVAL)
+        os.write(wfd, b"GetInfo: Type=Tracks\n")
+        # Reads never block on open, so this is safe even if Audacity never replies.
+        rfd = os.open(_SCRIPT_PIPE_FROM, os.O_RDONLY | os.O_NONBLOCK)
+        buf = b""
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            ready, _, _ = select.select([rfd], [], [], min(SELECT_INTERVAL, remaining))
+            if not ready:
+                continue
+            chunk = os.read(rfd, READ_CHUNK_BYTES)
+            if chunk:
+                buf += chunk
+            if RESPONSE_TERMINATOR in buf:
+                return af._parse_tracks_response(buf.decode("utf-8", errors="replace"))
+        return None
+    except (OSError, ValueError):  # ENXIO, or an unparseable/partial response
+        return None
+    finally:
+        for fd in (wfd, rfd):
+            if fd is not None:
+                os.close(fd)
 
-    def worker():
-        try:
-            raw = pa.do("GetInfo: Type=Tracks")
-            result["tracks"] = af._parse_tracks_response(raw)
-        except Exception:  # noqa: BLE001 — any failure means "not ready yet"
-            pass
 
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    t.join(timeout_per_probe)
-    return result["tracks"]
+def _probe_project_empty(timeout: float = PROBE_TIMEOUT_MAX):
+    """Best-effort "is the open project empty?" that can never block.
+
+    Returns True/False when the pipe answers, and ``None`` when it doesn't.
+    ``None`` is the interesting case: it means Audacity is running and holding
+    the FIFO, but has no project window to dispatch to (e.g. only an ``About
+    Audacity`` dialog is open), so commands are consumed without a reply.
+
+    This exists so that :func:`assert_audacity_window` never calls the
+    unguarded, indefinitely-blocking ``af.is_project_empty()``.
+    """
+    tracks = _probe_tracks_with_timeout(timeout)
+    return None if tracks is None else len(tracks) == 0
 
 
-def wait_for_audacity_ready(timeout: float = 10.0, verbose: bool = False) -> None:
+def wait_for_audacity_ready(
+    timeout: float = READY_TIMEOUT, verbose: bool = False
+) -> None:
     """Poll Audacity's scripting pipe until it responds to a read-only query.
 
     Works around an Audacity bug: on a freshly started instance, commands
@@ -151,83 +316,137 @@ def wait_for_audacity_ready(timeout: float = 10.0, verbose: bool = False) -> Non
 
     The scripting pipe becomes available earlier than the menu subsystem.
     We probe with ``GetInfo: Type=Tracks`` (pipe-only, no menu dispatch)
-    with exponential backoff. Each probe has its own hard timeout because
-    ``pa.do`` blocks on FIFO open until mod-script-pipe attaches on the
-    read side. If any probe needed more than one attempt — a proxy for
+    with exponential backoff. Each probe has its own hard timeout because a
+    running-but-project-less Audacity consumes commands without ever
+    answering. If any probe needed more than one attempt — a proxy for
     "Audacity was just cold-started" — we add a short settling delay so
     the menu subsystem can finish initializing before the caller sends
     commands like ``Close:``.
 
-    Raises ``TimeoutError`` if the pipe does not respond within ``timeout``
-    seconds. See README > Comments > Audacity cold-start race.
+    Raises ``ScriptPipeUnavailableError`` if the FIFOs never appear (module
+    disabled — waiting cannot help), or ``TimeoutError`` if they exist but
+    nothing answers within ``timeout`` seconds. See README > Comments >
+    Audacity cold-start race.
     """
     start = time.monotonic()
-    delay = 0.5
+    delay = POLL_DELAY_INITIAL
     attempt = 0
     while time.monotonic() - start < timeout:
         attempt += 1
-        # Cheap pre-check: is mod-script-pipe even attached to the FIFO?
-        # Saves us from burning the per-probe timeout during startup.
-        if not _is_script_pipe_listening():
+        # No FIFOs means mod-script-pipe isn't active. They're created during
+        # startup, so allow a grace period before concluding it's disabled —
+        # but don't burn the whole budget on something waiting can't fix.
+        if not script_pipe_exists():
+            if time.monotonic() - start >= SCRIPT_PIPE_GRACE:
+                raise ScriptPipeUnavailableError(
+                    f"{_SCRIPT_PIPE_TO} does not exist. {MOD_SCRIPT_PIPE_HINT}"
+                )
             time.sleep(delay)
-            delay = min(delay * 1.5, 2.0)
+            delay = min(delay * POLL_DELAY_FACTOR, POLL_DELAY_MAX)
             continue
         # Drain any stale bytes left by a previously timed-out probe before
         # attempting the next round-trip (diagnostic printed to stderr).
         drained = af._drain_read_pipe()
         if drained:
-            preview = drained[:200].decode("utf-8", errors="replace")
-            if len(drained) > 200:
+            preview = drained[:DRAIN_PREVIEW_BYTES].decode("utf-8", errors="replace")
+            if len(drained) > DRAIN_PREVIEW_BYTES:
                 preview += "..."
             print(
                 f"[pipe drain] discarded {len(drained)} stale bytes: {preview!r}",
                 file=sys.stderr,
             )
         remaining = timeout - (time.monotonic() - start)
-        per_probe = min(3.0, max(0.5, remaining))
+        per_probe = min(PROBE_TIMEOUT_MAX, max(PROBE_TIMEOUT_MIN, remaining))
         if _probe_tracks_with_timeout(per_probe) is not None:
             break
         time.sleep(delay)
-        delay = min(delay * 1.5, 2.0)
+        delay = min(delay * POLL_DELAY_FACTOR, POLL_DELAY_MAX)
     else:
-        raise TimeoutError(f"Audacity scripting pipe did not respond within {timeout}s")
+        windows = audacity_window_names()
+        detail = (
+            f"Open windows: {windows}. Audacity accepts pipe commands but never "
+            "answers them unless a project window is frontmost, so a dialog "
+            "(About, 'Save changes?', crash recovery, an export in progress) "
+            "produces exactly this timeout."
+            if windows
+            else "Audacity has no open window at all."
+        )
+        raise TimeoutError(
+            f"Audacity scripting pipe did not respond within {timeout}s. {detail}"
+        )
     if attempt > 1:
         # Probe needed retries → cold start. Give the menu subsystem a short
         # beat to finish initializing before the caller issues a menu-routed
         # command such as Close:.
-        time.sleep(1.5)
+        time.sleep(COLD_START_SETTLE)
         if verbose:
             elapsed = time.monotonic() - start
             print(f"Audacity ready after {elapsed:.1f}s (cold start).")
 
 
 def assert_audacity_running(verbose: bool = True):
+    """Ensure the Audacity process exists and has put up a window.
+
+    Deliberately does *not* probe the scripting pipe: the pipe cannot answer
+    until a project window exists, and ensuring that is
+    :func:`assert_audacity_window`'s job. Waiting on the pipe here deadlocked
+    whenever Audacity was running window-less or showing only a dialog.
+    """
     if is_audacity_running():
         if verbose:
             print("Audacity is running.")
-    else:
-        if verbose:
-            print("Audacity is not running. Starting it.")
-        start_audacity()
-    # Always probe readiness — Audacity may have just been launched (by us
-    # or by the user) and its menu subsystem may not be initialized yet.
-    wait_for_audacity_ready(verbose=verbose)
+        return
+    if verbose:
+        print("Audacity is not running. Starting it.")
+    start_audacity()
+    # Only worth waiting after a launch. An already-running Audacity that has
+    # no window will never grow one on its own — assert_audacity_window opens
+    # one via Cmd-N — so waiting there just burns the timeout.
+    if not wait_for_audacity_window(LAUNCH_WINDOW_TIMEOUT) and verbose:
+        print(f"No Audacity window appeared within {LAUNCH_WINDOW_TIMEOUT}s.")
 
 
 def assert_audacity_window(verbose: bool = True):
-    if is_audacity_window_open() and af.is_project_empty():
+    """Ensure an empty, script-addressable project window is frontmost.
+
+    The probe — not the window title — decides usability: a running Audacity
+    with no project window (none at all, or only an ``About Audacity`` dialog)
+    accepts pipe commands and never answers them. That state persists across
+    runs, so it must be actively recovered from rather than waited out.
+
+    Recovery is a single Cmd-N. We then wait only for the *window* to appear,
+    not for the pipe: measured on 3.7.8, the window shows at ~2.7 s and the
+    pipe starts answering at ~3.4 s, so probing for responsiveness here would
+    race project initialization. Confirming responsiveness is
+    :func:`wait_for_audacity_ready`'s job, which the caller runs next.
+    """
+    if _probe_project_empty() is True:
         if verbose:
             print("An Audacity window is open. Will use this.")
-    else:
-        if verbose:
-            print("Bringing Audacity window to the front with a new project.")
-        bring_audacity_window_to_front_as()
-        time.sleep(1)  # give it time
+        return
+
+    if verbose:
+        print("Bringing Audacity window to the front with a new project.")
+    before = audacity_window_names()
+    if not bring_audacity_window_to_front_as():  # Cmd-N
+        # The keystroke never reached Audacity, so no window can appear and
+        # the readiness probe that follows would time out for the wrong
+        # reason. run_osascript has already explained why on stderr.
+        return
+    if not wait_for_new_audacity_window(before, NEW_WINDOW_TIMEOUT) and verbose:
+        print(
+            f"No new Audacity window appeared within {NEW_WINDOW_TIMEOUT}s "
+            f"(windows: {audacity_window_names()}). A modal dialog may be "
+            "swallowing the Cmd-N."
+        )
 
 
 def assert_audacity(verbose: bool = True):
     assert_audacity_running(verbose)
+    # Readiness is probed only after a project window is guaranteed — the
+    # scripting pipe has nothing to dispatch to before that point.
     assert_audacity_window(verbose)
+    wait_for_audacity_ready(verbose=verbose)
 
 
 def main():

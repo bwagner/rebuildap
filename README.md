@@ -12,7 +12,7 @@ keeping track of the (rarely changing) original audio source material and the (m
 textual label files.
 
 ```console
-usage: rebuildap [-h] [-v] [-l] [-c] [-p] [-V] [filename]
+usage: rebuildap [-h] [-v] [-l] [-c] [-p] [-n] [-V] [filename]
 
 rebuild Audacity project
 
@@ -28,6 +28,9 @@ options:
   -p, --precise  Use the interactive ExportLabels dialog (6-decimal precision)
                  instead of the default non-interactive GetInfo path
                  (3-decimal precision). See README Comments.
+  -n, --no-save  Don't save the rebuilt project as <audio-stem>.aup3 beside
+                 the audio file. By default it is saved when no .aup3 exists
+                 yet; an existing one is never overwritten.
   -V, --version  show program's version number and exit
 ```
 
@@ -43,6 +46,19 @@ When providing an aup3 file, its label tracks are exported individually.
 When not providing a file at all, a running instance of Audacity with a project
 containing label tracks is searched for, of which the selected label tracks are
 exported or all if none are selected.
+
+After a rebuild, the project is saved as `<audio-stem>.aup3` **beside the audio
+file** (not in the current directory), so `rebuildap -c` has something to check
+and a crash doesn't cost you the rebuild. An existing `.aup3` is never
+overwritten — it is your working copy and may hold edits the label files don't
+have. Pass `-n` / `--no-save` to skip saving entirely.
+
+Saving also touches the label files' mtimes to match the new `.aup3`. Without
+that, `-c` would treat every label file as older than the project and re-export
+and diff it on every run, forever: it only rewrites a label file when the
+content actually diverges, so the condition would never clear. The rebuild
+proves the two agree, so recording that is accurate — no label file's *content*
+is modified.
 
 By default, label tracks are exported non-interactively via the scripting pipe
 (`GetInfo: Type=Labels`), so batch runs don't stop for a dialog. Pass `-p` /
@@ -196,6 +212,67 @@ not-yet-initialized pointer and Audacity crashes.
 These are workarounds, not fixes — the underlying bug is in Audacity and
 should be reported upstream. But together they're sufficient to run
 `rebuildap` across many projects without crashes.
+
+### Audacity running without a project window
+
+A separate failure with the same symptom (`TimeoutError: Audacity scripting
+pipe did not respond`). If Audacity is running but has **no project window** —
+either no window at all, or only a dialog such as `About Audacity` — then
+mod-script-pipe still creates and holds the FIFOs, accepts commands, and
+never answers them. Measured on 3.7.8: a raw `GetInfo: Type=Tracks` in this
+state returns a single newline instead of a response.
+
+This state persists across runs, so every invocation failed identically until
+Audacity was given a project window.
+
+**Fix:** ordering. `assert_audacity` now runs
+
+1. `assert_audacity_running` — process only (and, if we launched it, wait for a window)
+2. `assert_audacity_window` — guarantee a project window, opening one with Cmd-N
+3. `wait_for_audacity_ready` — *then* probe the pipe
+
+Previously readiness was probed in step 1, before any project window was
+guaranteed — so it waited for an answer that could not arrive. On timeout the
+error now also lists the open window titles.
+
+Two related traps, both since removed:
+
+- **The readiness probe must not leak fds.** It used to run `pa.do()` in a
+  daemon thread; on timeout that thread stayed blocked in `readline()` holding
+  *both* pipes open and then consumed the *next* probe's response. One timeout
+  poisoned every later probe in the process. It now talks to the FIFOs
+  directly and always closes them.
+- **No cheap "is the pipe listening?" pre-check.** Opening the write end with
+  `O_WRONLY | O_NONBLOCK` and closing it reads to Audacity as a client
+  connecting and hanging up: it ends the session and reopens both FIFOs,
+  breaking the round-trip that follows. It also could not distinguish a
+  healthy pipe from a project-less one, since both hold the FIFO open.
+
+Timing on 3.7.8, from a window-less instance: the project window appears
+~2.7 s after Cmd-N and the pipe starts answering at ~3.4 s, so the readiness
+budget must clear that comfortably.
+
+### Failures that used to surface as the same timeout
+
+Three environmental problems produced an identical, uninformative timeout.
+Each now reports what is actually wrong:
+
+- **mod-script-pipe not enabled.** The FIFOs are created at Audacity startup,
+  so if they never appear the module is inactive — waiting cannot help.
+  `wait_for_audacity_ready` now raises `ScriptPipeUnavailableError` after a
+  short grace period, naming the module and the preference to enable.
+- **No Accessibility permission.** Every GUI action (activate, Cmd-N, Cmd-W,
+  listing windows) goes through `osascript`, and each used to be run with its
+  return code ignored — so a refused keystroke was invisible and only showed
+  up as a later timeout. All of them now go through `run_osascript`, which
+  reports failures on stderr and adds a hint when macOS refused assistive
+  access. Note this means rebuildap needs a real, unlocked GUI login session.
+- **Ambiguous window titles.** An empty project window is titled `Audacity`,
+  so opening a second one adds no new *title*. New-window detection compares
+  window counts as well as titles.
+
+`test_audacity_present.py` covers all three by faking the environment, so no
+running Audacity is required.
 
 ## See also
 
