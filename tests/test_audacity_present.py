@@ -6,6 +6,7 @@ environment rather than driving the real app.
 """
 
 import subprocess
+import time
 
 import pytest
 
@@ -272,3 +273,101 @@ def test_frontmost_window_name_is_none_when_there_are_no_windows(monkeypatch):
         monkeypatch, returncode=1, stderr="Can’t get window 1. Invalid index. (-1719)"
     )
     assert ap.frontmost_audacity_window_name() is None
+
+
+# --- format-upgrade dialog ------------------------------------------------
+#
+# Opening an .aup3 saved by an older Audacity raises a modal "Project update
+# required" dialog that blocks OpenProject2 until acknowledged. The dialog has
+# no window title, so it is matched on its static text.
+
+UPGRADE_STATIC_TEXTS = (
+    "Project update required, This project was created using an older Audacity "
+    "version. Once saved, the project can only be opened with Audacity version "
+    "3.7 or newer., OK"
+)
+OTHER_DIALOG_STATIC_TEXTS = (
+    "Error Opening Project, angie is already open in another window."
+)
+
+
+def test_upgrade_dialog_detected_from_static_text(monkeypatch):
+    _fake_osascript(monkeypatch, stdout=UPGRADE_STATIC_TEXTS)
+    assert ap.upgrade_dialog_present()
+
+
+def test_unrelated_dialog_is_not_mistaken_for_the_upgrade_dialog(monkeypatch):
+    _fake_osascript(monkeypatch, stdout=OTHER_DIALOG_STATIC_TEXTS)
+    assert not ap.upgrade_dialog_present()
+
+
+def test_no_dialog_means_not_present(monkeypatch):
+    _fake_osascript(monkeypatch, stdout="")
+    assert not ap.upgrade_dialog_present()
+
+
+def test_osascript_failure_is_silent_and_reports_absent(monkeypatch, capsys):
+    """A poll loop must not spam stderr while Audacity is starting or gone."""
+    _fake_osascript(monkeypatch, returncode=1, stderr="Can't get process Audacity")
+    assert not ap.upgrade_dialog_present()
+    assert capsys.readouterr().err == ""
+
+
+def test_dismiss_reports_true_only_when_a_dialog_was_clicked(monkeypatch):
+    _fake_osascript(monkeypatch, stdout="dismissed")
+    assert ap.dismiss_upgrade_dialog()
+    _fake_osascript(monkeypatch, stdout="none")
+    assert not ap.dismiss_upgrade_dialog()
+
+
+def test_watcher_dismisses_dialog_that_appears_mid_flight(monkeypatch):
+    """The dialog only shows up after the open command is already in flight."""
+    state = {"polls": 0, "clicked": False}
+
+    def present():
+        state["polls"] += 1
+        return state["polls"] >= 2 and not state["clicked"]
+
+    def dismiss():
+        state["clicked"] = True
+        return True
+
+    monkeypatch.setattr(ap, "upgrade_dialog_present", present)
+    monkeypatch.setattr(ap, "dismiss_upgrade_dialog", dismiss)
+    monkeypatch.setattr(ap, "UPGRADE_DIALOG_POLL", 0.01)
+
+    with ap.dismissing_upgrade_dialog() as dismissed:
+        deadline = time.monotonic() + 2
+        while not dismissed.is_set() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    assert state["clicked"]
+    assert dismissed.is_set()
+
+
+def test_watcher_clicks_nothing_when_no_dialog_appears(monkeypatch):
+    clicks = []
+    monkeypatch.setattr(ap, "upgrade_dialog_present", lambda: False)
+    monkeypatch.setattr(ap, "dismiss_upgrade_dialog", lambda: clicks.append(1) or True)
+    monkeypatch.setattr(ap, "UPGRADE_DIALOG_POLL", 0.01)
+
+    with ap.dismissing_upgrade_dialog() as dismissed:
+        time.sleep(0.05)
+
+    assert clicks == []
+    assert not dismissed.is_set()
+
+
+def test_watcher_stops_after_the_block_exits(monkeypatch):
+    """A leaked watcher would keep clicking dialogs raised by later commands."""
+    polls = []
+    monkeypatch.setattr(ap, "upgrade_dialog_present", lambda: polls.append(1) or False)
+    monkeypatch.setattr(ap, "dismiss_upgrade_dialog", lambda: True)
+    monkeypatch.setattr(ap, "UPGRADE_DIALOG_POLL", 0.01)
+
+    with ap.dismissing_upgrade_dialog():
+        time.sleep(0.03)
+    after_exit = len(polls)
+    time.sleep(0.1)
+
+    assert len(polls) == after_exit

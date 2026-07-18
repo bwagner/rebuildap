@@ -296,6 +296,41 @@ Each now reports what is actually wrong:
 `tests/test_audacity_present.py` covers all three by faking the environment, so no
 running Audacity is required.
 
+### Projects saved by an older Audacity
+
+Opening an `.aup3` written by an older Audacity raises a modal **"Project update
+required"** dialog. Until someone acknowledges it, `OpenProject2:` never
+returns, so the caller times out with nothing to distinguish it from a wedged
+pipe — which made every pre-upgrade project in a batch sweep look like a
+scripting failure.
+
+A watcher now acknowledges that one dialog while the open is in flight
+(`audacity_present.dismissing_upgrade_dialog`). It cannot be pre-empted, because
+the dialog only appears once the command is already running; and waiting for the
+timeout first would mean recovering through the abandoned-thread path, which is
+documented above to eat the next call's response. Watching concurrently keeps
+the command on its normal, successful path.
+
+Two details make this safe rather than presumptuous:
+
+- **Opening does not modify the file.** The dialog says "*Once saved*, the
+  project can only be opened with Audacity version 3.7 or newer" — the
+  conversion happens on save, and `-c` never saves. Verified by md5: a project
+  file was byte-identical after being opened with the dialog dismissed.
+- **The watcher only ever touches that one dialog**, matched on its static text.
+  Several modal dialogs can be stacked at once (an `Error Opening Project`
+  alert, an `Applying Open Project2...` progress window), and clicking whichever
+  happens to be frontmost would be the same class of mistake as a bare Cmd-W.
+
+The dialog has **no window title** — it appears in the window list as an empty
+name — so unlike everything else here it cannot be found by title. It offers
+`OK` and nothing else (`AXCancelButton` is `missing value`, so Escape does
+nothing), which makes acknowledging the only way past it.
+
+Timing on 3.7.8: the dialog appears ~0.18 s after the command is sent and the
+open completes ~0.03 s after it is dismissed. The 5 s per-attempt timeout was
+never too tight — the whole budget was being spent waiting on a human.
+
 ## See also
 
 - [audacity_click_label](https://github.com/bwagner/audacity_click_label)

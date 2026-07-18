@@ -828,6 +828,7 @@ def open_project(
     retries: int = 1,
     retry_delay: float = 0.3,
     per_attempt_timeout: float = 5.0,
+    verbose: bool = False,
 ):
     """
     Opens the Audacity project given by filename.
@@ -835,7 +836,16 @@ def open_project(
     One retry on ``BatchCommand finished: Failed!`` (recently-closed project
     still mid-unload). Bails immediately on ``TimeoutError`` since a wedged
     pipe won't recover from retrying.
+
+    A project saved by an older Audacity raises a modal "project needs
+    updating" dialog that would otherwise hold this command open until it times
+    out, so a watcher acknowledges that one dialog while the open is in flight.
+    See ``audacity_present.dismissing_upgrade_dialog``.
     """
+    # Imported here rather than at module scope: audacity_present imports this
+    # module, so a top-level import would be circular.
+    from . import audacity_present as ap
+
     abs_path = filename.expanduser().resolve()
     cmd = f'OpenProject2: Filename="{abs_path}"'
     # No-op ping first — fail fast if pipe is wedged, rather than waiting out
@@ -844,7 +854,8 @@ def open_project(
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            _pa_do_timed(cmd, per_attempt_timeout)
+            with ap.dismissing_upgrade_dialog(verbose):
+                _pa_do_timed(cmd, per_attempt_timeout)
             return
         except pa.PyAudacityException as e:
             last_err = e
@@ -962,7 +973,7 @@ def open_audio(filename: Path, verbose=False):
     if is_audacity_project(filename):
         if verbose:
             print(f'Opening "{filename}"')
-        open_project(filename)
+        open_project(filename, verbose=verbose)
         if verbose:
             print(f'Done opening "{filename}"')
     else:

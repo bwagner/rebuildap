@@ -5,8 +5,10 @@ import os
 import select
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Sequence
+from contextlib import contextmanager
 
 import psutil
 
@@ -35,6 +37,27 @@ NEW_WINDOW_TIMEOUT = 15.0  # wait for the Cmd-N project window to appear
 WINDOW_POLL_INTERVAL = 0.5  # polling interval while waiting for a window
 DRAIN_PREVIEW_BYTES = 200  # stale-byte preview length in the drain diagnostic
 SCRIPT_PIPE_GRACE = 8.0  # allow this long for the FIFOs to be created at startup
+
+# Format-upgrade dialog. Opening an .aup3 written by an older Audacity raises a
+# modal "Project update required" dialog, and until it is acknowledged
+# OpenProject2 never returns — the caller just times out, with nothing to
+# distinguish it from a wedged pipe. Measured on 3.7.8: the dialog appears
+# ~0.18s after the command is sent and the open completes ~0.03s after it is
+# dismissed, so a 5s per-attempt timeout was never too tight — the whole budget
+# was being burned waiting on a human.
+#
+# Dismissing it is safe for read-only flows. Its own wording is "Once saved, the
+# project can only be opened with Audacity version 3.7 or newer", i.e. the
+# conversion happens on *save*; verified by md5 — a project file was unchanged
+# byte-for-byte after being opened with the dialog dismissed. It offers OK and
+# nothing else (AXCancelButton is `missing value`, so Escape does nothing),
+# which makes acknowledging the only way past it.
+#
+# The dialog has **no window title** — it shows up in the window list as an
+# empty name — so it cannot be found the way every other window here is found.
+# Match on its static text instead.
+UPGRADE_DIALOG_TEXT = "Project update required"
+UPGRADE_DIALOG_POLL = 0.15  # dialog observed at ~0.18s; poll ahead of that
 
 MOD_SCRIPT_PIPE_HINT = (
     "Audacity's scripting FIFOs were never created, which means the "
@@ -107,6 +130,94 @@ def run_osascript(script: str, what: str) -> tuple[bool, str]:
             print(ACCESSIBILITY_HINT, file=sys.stderr)
         return False, ""
     return True, result.stdout.strip()
+
+
+def _query_osascript_quiet(script: str) -> str | None:
+    """Run an AppleScript for its value, staying silent when it fails.
+
+    :func:`run_osascript` announces every failure on stderr, which is right for
+    one-shot actions but wrong for a poll loop: while Audacity is starting or
+    shutting down "no such process" is the expected answer several times a
+    second. Returns None on failure.
+    """
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def upgrade_dialog_present() -> bool:
+    """True if Audacity is showing the "project needs updating" dialog."""
+    out = _query_osascript_quiet(
+        'tell application "System Events" to tell process "Audacity" to '
+        "return value of every static text of "
+        '(every window whose subrole is "AXDialog")'
+    )
+    return out is not None and UPGRADE_DIALOG_TEXT in out
+
+
+def dismiss_upgrade_dialog() -> bool:
+    """Acknowledge the format-upgrade dialog. Returns True if one was dismissed.
+
+    Targets the dialog by its static text rather than clicking whatever dialog
+    happens to be frontmost: several modal dialogs can be stacked at once (an
+    "Error Opening Project" alert and an "Applying Open Project2..." progress
+    window have both been seen alongside it), and dismissing the wrong one is
+    the same class of mistake as a bare Cmd-W.
+    """
+    script = (
+        'tell application "System Events" to tell process "Audacity"\n'
+        '  repeat with w in (every window whose subrole is "AXDialog")\n'
+        "    if ((value of static texts of w) as string) contains "
+        f'"{UPGRADE_DIALOG_TEXT}" then\n'
+        '      click button "OK" of w\n'
+        '      return "dismissed"\n'
+        "    end if\n"
+        "  end repeat\n"
+        "end tell\n"
+        'return "none"'
+    )
+    out = _query_osascript_quiet(script)
+    return out == "dismissed"
+
+
+@contextmanager
+def dismissing_upgrade_dialog(verbose: bool = False):
+    """Watch for the format-upgrade dialog and acknowledge it while inside.
+
+    The dialog can only appear *after* the open command is in flight, so it
+    cannot be pre-empted; and waiting for the command to time out first would
+    mean recovering through ``_pa_do_timed``'s abandoned-thread path, which is
+    documented to eat the next call's response. Watching concurrently keeps the
+    command on its normal, successful path instead.
+
+    The watcher only ever touches the upgrade dialog, and only via osascript —
+    it never goes near the scripting pipe, so it cannot interfere with the
+    in-flight command.
+    """
+    done = threading.Event()
+    dismissed = threading.Event()
+
+    def watch():
+        while not done.is_set():
+            if upgrade_dialog_present() and dismiss_upgrade_dialog():
+                dismissed.set()
+                return
+            done.wait(UPGRADE_DIALOG_POLL)
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        yield dismissed
+    finally:
+        done.set()
+        watcher.join(timeout=UPGRADE_DIALOG_POLL * 2)
+        if verbose and dismissed.is_set():
+            print(
+                "Acknowledged Audacity's 'project needs updating' dialog. The "
+                "project file is not modified by opening it — the format "
+                "conversion would only happen on save."
+            )
 
 
 def audacity_window_names() -> list[str]:
