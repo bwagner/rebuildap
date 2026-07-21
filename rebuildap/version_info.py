@@ -9,7 +9,7 @@ Usage:
                         version=get_version_info(__version__))
 
 Output example:
-    0.1.0 (git:a3f9c2b-dirty, 2026-04-05 14:32:01 +0200)
+    0.1.0 (git:a3f9c2b-dirty, 2026-04-05 14:32:01 +0200) "fix the thing"
 """
 
 import os
@@ -36,12 +36,19 @@ def get_version_info(version):
             stderr=subprocess.DEVNULL,
             text=True,
         ).strip()
-        ts = subprocess.check_output(
-            ["git", "-C", _SRC_DIR, "log", "-1", "--format=%ai"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
+        # %ai (timestamp) and %s (subject) in one call; %n separates them, and
+        # the timestamp has no newline, so the first line is the timestamp and
+        # the remainder is the subject.
+        ts, _, subject = (
+            subprocess.check_output(
+                ["git", "-C", _SRC_DIR, "log", "-1", "--format=%ai%n%s"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            .strip()
+            .partition("\n")
+        )
         suffix = "-dirty" if dirty else ""
-        return f"{version} (git:{rev}{suffix}, {ts})"
+        return f'{version} (git:{rev}{suffix}, {ts}) "{subject}"'
     except Exception:
         return version
