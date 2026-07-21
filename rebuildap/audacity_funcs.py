@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -12,6 +13,8 @@ from typing import Dict, Generator, Iterable, List, Optional
 
 import pyaudacity as pa
 import pyperclip
+
+from .utils import LabelFormatError, normalize_label_line
 
 
 def _pa_do_timed(command: str, timeout: float) -> str:
@@ -280,9 +283,50 @@ def select_first_audio_track():
     pa.do(f"SelectTracks: Track={first_audio_track} Mode={SELECT_MODE_SET}")
 
 
+def assert_label_files_importable(audio_filename: Path) -> None:
+    """Validate every label file for ``audio_filename`` before Audacity starts.
+
+    Runs the same normalization the import uses, discarding the result, so a
+    malformed label file fails fast with a legible :class:`LabelFormatError`
+    and no Audacity window is ever created -- mirroring the aup3-exists and
+    already-open guards, which also refuse before launch. ``make_label_track_from_file``
+    re-validates as defense in depth for the ``-l`` single-file path.
+    """
+    for label_file in create_labels_glob(audio_filename):
+        normalize_label_file_for_import(label_file.expanduser().resolve())
+
+
+def normalize_label_file_for_import(label_file: Path) -> str:
+    """Return ``label_file``'s content in the canonical two-tab label form.
+
+    ``ImportLabels.ny`` requires three tab-separated fields per line; the corpus
+    also holds 1-column beat-time and 2-column ``time<TAB>beatnumber`` files,
+    which crash it with a bare ``BatchCommand finished: Failed!``. Each line is
+    mapped through :func:`normalize_label_line`; blank lines are dropped. A line
+    that fits no known shape raises :class:`LabelFormatError` naming the file and
+    line number, so the failure is legible. The source file is never modified.
+    """
+    normalized = []
+    for lineno, raw in enumerate(label_file.read_text().splitlines(), start=1):
+        if not raw.strip():
+            continue
+        line = normalize_label_line(raw)
+        if line is None:
+            raise LabelFormatError(
+                f"{label_file.name} line {lineno}: not a recognized label "
+                f"(expected time, time<TAB>text, or start<TAB>end<TAB>text): {raw!r}"
+            )
+        normalized.append(line)
+    return "".join(normalized)
+
+
 def make_label_track_from_file(label_file: Path, label_track_name: str = None):
     """
     Makes a new label track from the given file and names the label track according to the given name.
+
+    The versioned file may be 1-, 2-, or 3-column; it is normalized to the
+    two-tab form ``ImportLabels.ny`` requires and written to a throwaway temp
+    file, which is what gets imported. The source file on disk is left untouched.
     """
 
     label_track_name = (
@@ -291,13 +335,24 @@ def make_label_track_from_file(label_file: Path, label_track_name: str = None):
         else re.sub(r"_?label_?", "", label_file.stem)
     )
     abs_path = label_file.expanduser().resolve()
+    normalized = normalize_label_file_for_import(abs_path)
 
-    with save_selection():
-        select_first_audio_track()  # needed for nyquist
-        pa.do("SelTrackStartToEnd:")  # needed for nyquist
-        pa.do(f'ImportLabels: fname="{abs_path}"')
-        pa.do(f"SelectTracks: Track={get_track_count() - 1} Mode={SELECT_MODE_SET}")
-        pa.do(f'SetTrack: Name="{label_track_name}"')
+    # ImportLabels.ny only accepts a *.txt path (its file control filters on it).
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as tf:
+        tf.write(normalized)
+        tmp_path = Path(tf.name)
+
+    try:
+        with save_selection():
+            select_first_audio_track()  # needed for nyquist
+            pa.do("SelTrackStartToEnd:")  # needed for nyquist
+            pa.do(f'ImportLabels: fname="{tmp_path}"')
+            pa.do(f"SelectTracks: Track={get_track_count() - 1} Mode={SELECT_MODE_SET}")
+            pa.do(f'SetTrack: Name="{label_track_name}"')
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def make_label_track_01(label_file: Path, label_track_name: str):

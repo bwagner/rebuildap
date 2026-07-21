@@ -59,3 +59,51 @@ was investigated and rejected: Nyquist-side label access also goes through
 `aud-get-info` (see Steve Daulton's `ExportAllLabelTracks1.ny` for reference),
 so a custom Nyquist plug-in would have the **same 3-decimal precision floor**
 as our direct `GetInfo` path — no advantage.
+
+## Importing labels: normalizing the input format
+
+Import runs through the Nyquist plug-in
+[`ImportLabels.ny`](https://audionyq.com/wp-content/uploads/2022/09/ImportLabels.ny),
+which requires each line to have **exactly three tab-separated fields** (two
+tabs), `start<TAB>end<TAB>text`, with the text possibly empty. It builds a Lisp
+expression per line and only opens the string quote after the *second* tab, so a
+line with fewer tabs produces malformed Lisp and the whole import fails with a
+bare `BatchCommand finished: Failed!` — no indication of which file or line.
+
+Real label files in the corpus come in three shapes, and two of them are not
+directly importable:
+
+| source                                | shape                     | example        |
+|---------------------------------------|---------------------------|----------------|
+| raw beat times                        | 1 column                  | `0.470`        |
+| `DBNDownBeatTracker single`           | 2 columns, `time<TAB>num` | `0.470  4`     |
+| Audacity's own export                 | 3 columns                 | `0.47  0.47  ` |
+
+`rebuildap` normalizes every line to the three-field canonical form in a
+throwaway temp file and imports **that**; the versioned source is never touched.
+The same normalizer (`rebuildap.utils.normalize_label_line`) is what check mode
+compares both sides through, so a 1-column source and its 3-column re-export
+compare equal — the round trip is a fixed point, not a permanent divergence.
+
+**A 2-column line is always a point label whose text is field 2 — rule A —**
+even when field 2 is numeric (`0.470  4` -> `0.47  0.47  4`). The only 2-column
+source here is `DBNDownBeatTracker`, whose second column is a **downbeat number**
+(1..4), i.e. label text, not an end time. Reading it as `start<TAB>end` yields
+backwards regions (`1.12  1` -> a region ending *before* it starts). No genuine
+`start<TAB>end` region source exists — the exporter always writes three fields —
+so nothing is lost. See `decisions.md` (2026-07-21).
+
+Two subtleties that the normalizer must respect:
+
+- **Only the line terminator is stripped, never the field tabs.** Audacity
+  writes an empty-text label as `start<TAB>end<TAB>` (trailing tab); collapsing
+  that to two fields would make rule A misread the end time as text and break the
+  check-mode round trip for every 1-column project.
+- **Only times are trailing-zero-trimmed** (`0.470` -> `0.47`); the text field is
+  taken verbatim (`3.500` stays `3.500`).
+
+A line that matches none of the three shapes (a stray header, a blank-but-junk
+line) is rejected **before Audacity is started**, with a `LabelFormatError`
+naming the file and line number — the same fail-before-launch stance as the
+already-open and aup3-exists guards, so a bad file costs ~0.07 s and leaks no
+window.

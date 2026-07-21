@@ -10,7 +10,73 @@ deliberately avoids converting the input into a Python float to
 preserve arbitrary precision and to reject scientific notation.
 """
 
+import re
 from typing import Optional
+
+# Canonical import/compare form is Audacity's own label line: three
+# tab-separated fields ``start<TAB>end<TAB>text`` (two tabs), text possibly
+# empty. This is simultaneously what ``ImportLabels.ny`` can parse and the form
+# check mode normalizes both sides to before comparing.
+_LABEL_FIELD_SEP = "\t"
+_FLOAT_RE = re.compile(r"^-?(?:\d+\.\d*|\.\d+|\d+)$")
+
+
+class LabelFormatError(ValueError):
+    """A label file line matches no recognized shape.
+
+    Raised while normalizing a file for import, so the caller sees the offending
+    file and line instead of Nyquist's bare ``BatchCommand finished: Failed!``.
+    """
+
+
+def is_float(s: str) -> bool:
+    """Return True if ``s`` is a plain float literal (no scientific notation)."""
+    return bool(_FLOAT_RE.match(s))
+
+
+def normalize_label_line(line: str) -> Optional[str]:
+    """Map one label line onto the canonical ``start<TAB>end<TAB>text\\n`` form.
+
+    Handles the four shapes real label files come in:
+
+    - ``t``               -> ``t<TAB>t<TAB>``      (1-column beat time -> point label)
+    - ``t<TAB>x``         -> ``t<TAB>t<TAB>x``      (2-column: field 2 is the *text*)
+    - ``t1<TAB>t2<TAB>x`` -> ``t1<TAB>t2<TAB>x``    (already canonical)
+
+    **A 2-column line is always a point label whose text is field 2, even when
+    field 2 is numeric.** The only 2-column source in the corpus is
+    ``DBNDownBeatTracker`` output, ``time<TAB>beatnumber`` -- the number is a
+    downbeat position (1..4), i.e. label text, not an end time. Reading it as
+    ``start<TAB>end`` yields backwards regions (e.g. ``1.12  1`` -> end before
+    start). No genuine ``start<TAB>end`` region file exists here (the exporter
+    always writes three fields), so nothing is lost by this rule. See
+    ``docs/label-export.md`` and ``decisions.md`` (2026-07-21).
+
+    Times are passed through :func:`cut_trailing_zeros` so 6-decimal exports and
+    3-decimal sources compare equal. Returns ``None`` for any line that fits none
+    of these shapes (blank, non-numeric first field, too many fields), leaving
+    the caller to decide whether that is a passthrough (check mode) or an error
+    (import).
+
+    Only the line terminator is stripped, never the field tabs: Audacity's own
+    export writes an *empty-text* label as ``start<TAB>end<TAB>`` (trailing tab),
+    and collapsing that to two fields would make rule A read the end time as
+    text -- breaking the check-mode round-trip for every 1-column source.
+    """
+    sep = _LABEL_FIELD_SEP
+    parts = line.rstrip("\r\n").split(sep)
+
+    if len(parts) == 1 and is_float(parts[0]):
+        start = cut_trailing_zeros(parts[0])
+        return f"{start}{sep}{start}{sep}\n"
+    if len(parts) == 2 and is_float(parts[0]):
+        start = cut_trailing_zeros(parts[0])
+        return f"{start}{sep}{start}{sep}{parts[1]}\n"
+    if len(parts) == 3 and is_float(parts[0]) and is_float(parts[1]):
+        start = cut_trailing_zeros(parts[0])
+        end = cut_trailing_zeros(parts[1])
+        return f"{start}{sep}{end}{sep}{parts[2]}\n"
+    return None
 
 
 def cut_trailing_zeros(value: str) -> str:

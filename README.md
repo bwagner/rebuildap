@@ -42,6 +42,13 @@ Label files are matched by name: for input `mysong.mp3`, every `*_mysong.txt`
 beside it is treated as a label track, and the prefix becomes the track name
 (`chords_mysong.txt` -> a track called `chords`).
 
+A label file may be 1-column (`time`, e.g. raw beat times), 2-column
+(`time<TAB>text`, e.g. `DBNDownBeatTracker` downbeat numbers), or 3-column
+(`start<TAB>end<TAB>text`, Audacity's own export format). All three are accepted
+and normalized on import; the versioned files are never rewritten. A line that
+fits none of these is rejected up front, naming the file and line
+([details](docs/label-export.md#importing-labels-normalizing-the-input-format)).
+
 There are three ways to call it:
 
 | You pass… | What happens |

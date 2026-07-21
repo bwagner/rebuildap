@@ -1,14 +1,13 @@
 #!/usr/bin/env python
 import argparse
 import difflib
-import re
 import sys
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 from . import audacity_funcs as af
 from . import audacity_present as ap
-from .utils import cut_trailing_zeros
+from .utils import normalize_label_line
 from .version_info import get_version_info
 
 """
@@ -18,35 +17,14 @@ rebuildap.py song.mp3
 """
 
 
-def is_float(s):
-    """Return True if s is a valid Python float literal (excluding scientific notation)."""
-    float_like = re.compile(r"^-?(?:\d+\.\d*|\.\d+|\d+)$")
-    return bool(float_like.match(s))
-
-
 def process_lines(lines):
-    result = []
-    for line in lines:
-        parts = line.strip().split("\t")
+    """Normalize label lines to the shared canonical form for comparison.
 
-        if len(parts) == 1 and is_float(parts[0]):
-            f = cut_trailing_zeros(parts[0])
-            result.append(f"{f}\t{f}\n")
-        elif len(parts) == 2 and is_float(parts[0]) and not is_float(parts[1]):
-            f = cut_trailing_zeros(parts[0])
-            result.append(f"{f}\t{f}\t{parts[1]}\n")
-        elif len(parts) == 2 and is_float(parts[0]) and is_float(parts[1]):
-            f1 = cut_trailing_zeros(parts[0])
-            f2 = cut_trailing_zeros(parts[1])
-            result.append(f"{f1}\t{f2}\n")
-        elif len(parts) == 3 and is_float(parts[0]) and is_float(parts[1]):
-            f1 = cut_trailing_zeros(parts[0])
-            f2 = cut_trailing_zeros(parts[1])
-            result.append(f"{f1}\t{f2}\t{parts[2]}\n")
-        else:
-            result.append(line)
-
-    return result
+    Unrecognized lines pass through unchanged (the diff will surface them). The
+    import path uses the same :func:`normalize_label_line` but treats an
+    unrecognized line as an error instead. See ``rebuildap.utils``.
+    """
+    return [normalize_label_line(line) or line for line in lines]
 
 
 def check_label_age(filename: str, verbose):
@@ -231,7 +209,10 @@ def rebuild(filename=None, verbose=False, label=False, check=False, save=True):
         if label:
             if verbose:
                 print("importing label into open audacity project.")
-            af.make_label_track_from_file(filename)
+            try:
+                af.make_label_track_from_file(filename)
+            except af.LabelFormatError as e:
+                raise SystemExit(f"{e}") from e
             return
         # Rebuilding audio into a project whose .aup3 already exists throws the
         # result away: save_project_if_absent will decline to overwrite, leaving
@@ -250,6 +231,15 @@ def rebuild(filename=None, verbose=False, label=False, check=False, save=True):
                     "rebuild into an unsaved window anyway, or move the existing "
                     f"{existing.name} aside first."
                 )
+        # Validate label files before starting Audacity: a malformed one
+        # otherwise crashes mid-rebuild, after the audio is imported and the
+        # window is open but unsaved (nothing can then close it safely). Only
+        # for audio input — .aup3 input exports labels, it does not import them.
+        if not af.is_audacity_project(filename):
+            try:
+                af.assert_label_files_importable(filename)
+            except af.LabelFormatError as e:
+                raise SystemExit(f"{e}") from e
         try:
             af.assert_not_already_open(filename)
             ap.assert_audacity(verbose)

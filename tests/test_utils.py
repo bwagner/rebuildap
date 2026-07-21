@@ -24,7 +24,10 @@ def test_process_lines():
             "5.5\t6.6\t7.7\tignored",
         ]
     ) == [
-        "3.14\t3.14\n",
+        # Two-tab canonical form: 1-column becomes a point label with empty
+        # text, which is what ImportLabels.ny requires and what check mode now
+        # normalizes both sides to.
+        "3.14\t3.14\t\n",
         "2.71\t2.71\tfoo\n",
         "1\t2\tbar\n",
         "1\t2\tbar\n",
