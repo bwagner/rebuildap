@@ -78,7 +78,7 @@ batch runs never stop for a dialog. There's a small precision trade-off:
 ## Usage
 
 ```console
-usage: rebuildap [-h] [-v] [-l] [-c] [-n] [-V] [filename]
+usage: rebuildap [-h] [-v] [-l] [-c] [-d] [-n] [-V] [filename]
 
 rebuild Audacity project
 
@@ -91,6 +91,11 @@ options:
   -l, --label    Import label file.
   -c, --check    Check whether audacity file newer than label files and show
                  differences.
+  -d, --deep     With -c, skip the mtime gate and compare every label file
+                 against the project's label tracks, even ones newer than the
+                 .aup3. Opens Audacity every run but never reports a false
+                 'nothing to do' when a label file was rewritten (git
+                 checkout, touch) without the project changing.
   -n, --no-save  Don't save the rebuilt project as <audio-stem>.aup3 beside
                  the audio file. By default it is saved when no .aup3 exists
                  yet; an existing one is never overwritten.

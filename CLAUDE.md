@@ -58,8 +58,13 @@ These shape most decisions here and are not obvious from the code.
   ~2.7s after Cmd-N, pipe answering at ~3.4s on 3.7.8). **Measure before changing
   any timeout or retry ladder** - a previous recovery path was designed against
   assumed timings and closed healthy windows.
-- Verify against copies, never the user's `cover-notes-gitlab/batch01` projects.
-  Merely *opening* an aup3 updates its mtime (Audacity issue #9161).
+- Verify against copies, never the user's `cover-notes-gitlab/batch01` projects:
+  a test that drives Audacity can edit, save, or crash a project. Note it is
+  *editing* an aup3 - even an edit you then undo - that bumps its mtime, because
+  Audacity writes edits to the file before you Save (Audacity issue #9161).
+  Merely *opening and closing* one does not, and neither does a read-only
+  `GetInfo` (the deep-check path, `-c -d`): confirmed 2026-07-21, both an
+  open+close and an open -> `GetInfo` -> close left the mtime byte-identical.
 
 ## Project memory
 

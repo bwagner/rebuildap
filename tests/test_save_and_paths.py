@@ -192,6 +192,69 @@ def test_check_mode_skips_an_open_project_without_starting_audacity(
     assert "angie.aup3" in capsys.readouterr().err
 
 
+def test_check_prints_nothing_to_do_without_verbose(tmp_path, capsys):
+    """A non-verbose -c that finds nothing must still say so on stdout.
+
+    All label files newer than the .aup3 -> nothing to compare. The message
+    used to be gated behind -v, so the run looked like it did nothing at all.
+    """
+    import rebuildap
+
+    project = tmp_path / "song.aup3"
+    project.write_bytes(b"aup3")
+    os.utime(project, (1, 1))  # old project
+    label = tmp_path / "parts_song.txt"
+    label.write_text("0.0\t1.0\tintro\n")  # written now, so newer than project
+
+    rebuildap.check_label_age(str(project), verbose=False)
+
+    assert "Nothing to do" in capsys.readouterr().out
+
+
+def test_check_prints_when_no_label_files(tmp_path, capsys):
+    """No matching label files at all is reported, not silent."""
+    import rebuildap
+
+    project = tmp_path / "song.aup3"
+    project.write_bytes(b"aup3")
+
+    rebuildap.check_label_age(str(project), verbose=False)
+
+    assert "No label files found" in capsys.readouterr().out
+
+
+def test_deep_check_opens_even_when_label_is_newer(monkeypatch, tmp_path):
+    """--deep bypasses the mtime gate: a newer label file is still compared.
+
+    The non-deep path returns before touching Audacity here; deep must instead
+    reach open_audio and the getinfo comparison.
+    """
+    import rebuildap
+    from rebuildap import audacity_funcs as af
+    from rebuildap import audacity_present as ap
+
+    project = tmp_path / "song.aup3"
+    project.write_bytes(b"aup3")
+    os.utime(project, (1, 1))  # old project
+    label = tmp_path / "parts_song.txt"
+    label.write_text("0.0\t1.0\tintro\n")  # newer than project
+
+    opened = []
+    monkeypatch.setattr(af, "project_already_open", lambda _f: False)
+    monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
+    monkeypatch.setattr(ap, "close_owned_window", lambda *a, **k: None)
+    monkeypatch.setattr(af, "open_audio", lambda *a, **k: opened.append(a) or None)
+    monkeypatch.setattr(
+        af,
+        "get_label_tracks_content_via_getinfo",
+        lambda: {"parts": "0.0\t1.0\tintro\n"},
+    )
+
+    rebuildap.check_label_age(str(project), verbose=False, deep=True)
+
+    assert opened, "deep check must open the project despite the newer label file"
+
+
 # --- not rebuilding into a window that will be thrown away -----------------
 #
 # `rebuildap song.opus` when song.aup3 already exists used to import the audio

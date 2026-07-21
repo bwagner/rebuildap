@@ -27,11 +27,18 @@ def process_lines(lines):
     return [normalize_label_line(line) or line for line in lines]
 
 
-def check_label_age(filename: str, verbose):
+def check_label_age(filename: str, verbose, deep=False):
     """
     Check whether the audacity file is newer than the label files.
     Export those label tracks whose corresponding label files are older than the audacity file
     and compare their contents with their corresponding label files.
+
+    With ``deep=True`` the mtime gate is skipped and every label file is
+    compared against the project's label tracks, regardless of mtimes. This
+    costs an Audacity open on every run but never gives a false "nothing to
+    do": mtimes lie when something rewrites a label file without touching the
+    project (``git checkout``, ``touch``, a restore), leaving it newer than the
+    ``.aup3`` while its content has diverged.
 
     Unfortunately, opening an audacity project and applying changes that are undone still
     updates the modification time of the project file. Filed an issue with Audacity:
@@ -69,17 +76,25 @@ def check_label_age(filename: str, verbose):
     if verbose:
         print(f"Checking whether {filename.name} newer than label files.")
     label_files = af.reorder_labels(af.create_labels_glob(filename))
-    audacity_file_mtime = filename.stat().st_mtime
-    outdated_candidates = [
-        Path(label_file)
-        for label_file in label_files
-        if label_file.stat().st_mtime < audacity_file_mtime
-    ]
-
-    if not outdated_candidates:
-        if verbose:
-            print(f"All label files are newer than {filename.name}. Nothing to do.")
+    if not label_files:
+        print(f"No label files found for {filename.name}. Nothing to do.")
         return
+
+    if deep:
+        # Skip the mtime gate: compare every label file, regardless of age.
+        candidates = list(label_files)
+    else:
+        audacity_file_mtime = filename.stat().st_mtime
+        candidates = [
+            Path(label_file)
+            for label_file in label_files
+            if label_file.stat().st_mtime < audacity_file_mtime
+        ]
+        if not candidates:
+            # Printed unconditionally, not only under -v: a check run that
+            # concludes there is nothing to do must say so, or it looks broken.
+            print(f"All label files are newer than {filename.name}. Nothing to do.")
+            return
 
     # TODO: export only the label tracks that are older than the audacity file
     try:
@@ -101,7 +116,7 @@ def check_label_age(filename: str, verbose):
         print(f"Skipping {filename.name}: {e}", file=sys.stderr)
         return
 
-    _check_label_age_via_getinfo(filename, outdated_candidates)
+    _check_label_age_via_getinfo(filename, candidates)
 
     # Close via AppleScript Cmd-W rather than pa.do("Close:") — avoids the
     # mod-script-pipe → lib-menus.dylib crash path that bites after a few
@@ -113,14 +128,14 @@ def check_label_age(filename: str, verbose):
     ap.close_owned_window(filename.stem, verbose)
 
 
-def _check_label_age_via_getinfo(filename, outdated_candidates):
+def _check_label_age_via_getinfo(filename, candidates):
     """Non-interactive path: compare versioned files against GetInfo content in memory."""
     contents = af.get_label_tracks_content_via_getinfo()
     # Beside the project being checked, not in the cwd: `rebuildap -c
     # /elsewhere/song.aup3` used to scatter export artifacts wherever it
     # happened to be run from.
     out_dir = Path(filename).expanduser().resolve().parent
-    for label_file in outdated_candidates:
+    for label_file in candidates:
         short_name = label_file.stem.replace(f"_{Path(filename.name).stem}", "")
         expected = contents.get(short_name)
         if expected is None:
@@ -201,9 +216,11 @@ def prerequisites_met(verbose: bool) -> bool:
     return True
 
 
-def rebuild(filename=None, verbose=False, label=False, check=False, save=True):
+def rebuild(
+    filename=None, verbose=False, label=False, check=False, save=True, deep=False
+):
     if check:
-        check_label_age(filename, verbose)
+        check_label_age(filename, verbose, deep=deep)
     elif filename:
         filename = Path(filename)
         if label:
@@ -309,6 +326,18 @@ def main():
         help="Check whether audacity file newer than label files and show differences.",
     )
     parser.add_argument(
+        "-d",
+        "--deep",
+        action="store_true",
+        help=(
+            "With -c, skip the mtime gate and compare every label file against "
+            "the project's label tracks, even ones newer than the .aup3. Opens "
+            "Audacity every run but never reports a false 'nothing to do' when a "
+            "label file was rewritten (git checkout, touch) without the project "
+            "changing."
+        ),
+    )
+    parser.add_argument(
         "-n",
         "--no-save",
         action="store_true",
@@ -325,12 +354,15 @@ def main():
         version=get_version_info(_pkg_version("rebuildap")),
     )
     args = parser.parse_args()
+    if args.deep and not args.check:
+        parser.error("--deep only applies with --check/-c.")
     rebuild(
         args.filename,
         args.verbose,
         args.label,
         args.check,
         save=not args.no_save,
+        deep=args.deep,
     )
 
 
