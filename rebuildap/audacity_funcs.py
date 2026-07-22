@@ -9,7 +9,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Generator, Iterable, List, Optional
+from typing import Dict, Generator, Iterable, List, Optional, Tuple
 
 import pyaudacity as pa
 import pyperclip
@@ -111,6 +111,12 @@ LABEL_BEAT = "beat"
 LABEL_PRIORITY_ORDER = [LABEL_PART, LABEL_CHORD, LABEL_LYRIC]
 
 AUDACITY_EXTENSION = "aup3"
+
+# Marker for the "Open Recent" submenu inside a GetInfo: Type=Menus response,
+# and the pattern for the .aup3 paths its entries carry as their "label".
+RECENT_MENU_MARKER = '"label":"Open Recent"'
+RECENT_AUP3_LABEL_RE = rf'"label":"([^"]+\.{AUDACITY_EXTENSION})"'
+MENU_TOP_LEVEL_RE = r'"depth":1'
 
 
 class ProjectAlreadyOpenError(RuntimeError):
@@ -809,21 +815,85 @@ def _derive_label_filename(track_name: str, aup3_stem: str) -> str:
     return f"{track_name}_{aup3_stem}.txt"
 
 
-def _resolve_output_context(aup3_path=None):
-    """Return (out_dir: Path, aup3_stem: str).
+def _parse_recent_project_paths(menus_response: str) -> List[Path]:
+    """Extract the Open Recent submenu's ``.aup3`` paths from a ``GetInfo:
+    Type=Menus`` response.
 
-    When ``aup3_path`` is given, derive both from it. Otherwise fall back to
-    cwd + the name of the first wave track in the open project (conventional
-    project-dir workflow).
+    Regex-scoped rather than a full-tree ``json.loads``: an unrelated menu label
+    in the payload carries an invalid JSON escape that makes strict parsing of
+    the whole tree fail. We only need the Open Recent section, so the scan runs
+    from its marker to the next top-level (``depth:1``) entry and pulls the
+    ``.aup3`` labels in between — ignoring same-suffixed labels elsewhere in the
+    menu tree.
     """
-    if aup3_path is not None:
-        p = Path(aup3_path)
-        return p.parent, p.stem
+    start = menus_response.find(RECENT_MENU_MARKER)
+    if start == -1:
+        return []
+    tail = menus_response[start + len(RECENT_MENU_MARKER) :]
+    end = re.search(MENU_TOP_LEVEL_RE, tail)
+    section = tail[: end.start()] if end else tail
+    return [Path(m) for m in re.findall(RECENT_AUP3_LABEL_RE, section)]
+
+
+def dir_holds_project(directory: Path, stem: str) -> bool:
+    """True if ``directory`` looks like the project's own dir: it holds either
+    ``<stem>.aup3`` or a versioned ``*_<stem>.txt`` label file.
+
+    The no-arg export only ever writes into the current directory, so this is
+    the gate that decides whether cwd is the right place to write — the
+    source-of-truth label files must not be scattered into an unrelated dir.
+    """
+    if (directory / f"{stem}.{AUDACITY_EXTENSION}").exists():
+        return True
+    return any(directory.glob(f"*_{stem}.txt"))
+
+
+def open_project_wave_stem() -> str:
+    """The open project's stem: the name of its first wave track, via GetInfo."""
     tracks = _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
     wave = next((t for t in tracks if t.get("kind") == "wave"), None)
     if wave is None:
         raise RuntimeError("Cannot derive output context: no wave track in project")
-    return Path.cwd(), wave["name"]
+    return wave["name"]
+
+
+def find_recent_project_dirs(stem: str) -> List[Path]:
+    """Directories of on-disk ``.aup3`` files named ``stem`` in Audacity's
+    **Open Recent** menu. Sorted, de-duplicated; possibly empty.
+
+    Advisory only — never used to auto-write, just to *suggest* where the open
+    project lives when cwd is not it. Audacity exposes no per-window file path
+    (``AXDocument`` is ``missing value``, there is no ``GetInfo: Type=Project``),
+    so Open Recent is the one route to a path, and it is a recency list rather
+    than "the file this window holds": it may miss a project evicted from the
+    list, and it may list several same-stem projects in different directories.
+    Both are fine here — the caller shows the list and lets the user pick.
+    """
+    try:
+        menus = pa.do("GetInfo: Type=Menus")
+    except Exception:  # noqa: BLE001 — a flaky pipe just means "no suggestions"
+        return []
+    dirs = {
+        p.parent
+        for p in _parse_recent_project_paths(menus)
+        if p.stem == stem and p.exists()
+    }
+    return sorted(dirs)
+
+
+def _resolve_output_context(aup3_path=None):
+    """Return (out_dir: Path, aup3_stem: str).
+
+    When ``aup3_path`` is given, derive both from it. Otherwise this is the
+    no-argument workflow: write into the current directory, with the stem taken
+    from the open project's first wave track. (The caller has already decided
+    cwd is the right place — see :func:`dir_holds_project` — so no resolution
+    happens here.)
+    """
+    if aup3_path is not None:
+        p = Path(aup3_path)
+        return p.parent, p.stem
+    return Path.cwd(), open_project_wave_stem()
 
 
 def get_label_tracks_content_via_getinfo() -> Dict[str, str]:
@@ -845,14 +915,22 @@ def get_label_tracks_content_via_getinfo() -> Dict[str, str]:
     }
 
 
-def _write_via_getinfo(indices: Iterable[int], aup3_path=None) -> List[Path]:
-    """Shared core: write one .txt per given label-track index. Returns written paths."""
+def _write_via_getinfo(
+    indices: Iterable[int], aup3_path=None
+) -> List[Tuple[str, Path]]:
+    """Shared core: write one .txt per given label-track index.
+
+    Returns ``(track_name, written_path)`` pairs. The name is carried out
+    alongside the path so callers can report both without re-deriving the name
+    from the filename — which is lossy, since a track name may contain the same
+    underscores ``_derive_label_filename`` uses as a separator.
+    """
     out_dir, stem = _resolve_output_context(aup3_path)
     labels_by_idx = _parse_labels_response(pa.do("GetInfo: Type=Labels"))
     names_by_idx = _label_track_names_by_idx(
         _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
     )
-    written: List[Path] = []
+    written: List[Tuple[str, Path]] = []
     wanted = set(indices)
     for idx, labels in labels_by_idx.items():
         if idx not in wanted:
@@ -862,22 +940,24 @@ def _write_via_getinfo(indices: Iterable[int], aup3_path=None) -> List[Path]:
             continue
         out_path = out_dir / _derive_label_filename(name, stem)
         out_path.write_text(_format_track_txt(labels))
-        written.append(out_path)
+        written.append((name, out_path))
     return written
 
 
-def export_label_tracks_via_getinfo(aup3_path=None) -> List[Path]:
-    """Export every label track, one file per track."""
+def export_label_tracks_via_getinfo(aup3_path=None) -> List[Tuple[str, Path]]:
+    """Export every label track, one file per track. Returns (name, path) pairs."""
     return _write_via_getinfo(get_label_track_indices(), aup3_path)
 
 
-def export_selected_label_tracks_via_getinfo(aup3_path=None) -> List[Path]:
-    """Export the selected label tracks, one file per track."""
+def export_selected_label_tracks_via_getinfo(aup3_path=None) -> List[Tuple[str, Path]]:
+    """Export the selected label tracks, one file per track. Returns (name, path) pairs."""
     return _write_via_getinfo(get_selected_label_track_indices(), aup3_path)
 
 
-def export_selected_or_all_label_tracks_via_getinfo(aup3_path=None) -> List[Path]:
-    """Export the selected label tracks, or all of them when none is selected."""
+def export_selected_or_all_label_tracks_via_getinfo(
+    aup3_path=None,
+) -> List[Tuple[str, Path]]:
+    """Export the selected label tracks, or all when none is selected. Returns (name, path) pairs."""
     indices = get_selected_label_track_indices() or get_label_track_indices()
     return _write_via_getinfo(indices, aup3_path)
 

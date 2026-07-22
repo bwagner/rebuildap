@@ -16,6 +16,9 @@ rebuildap.py song.mp3
 
 """
 
+# Indent for a path printed on its own line, so long paths stay readable.
+_PATH_INDENT = "  "
+
 
 def process_lines(lines):
     """Normalize label lines to the shared canonical form for comparison.
@@ -196,7 +199,7 @@ def _report_diff(label_file, exported_label_name, labels_from_file, labels_from_
 
 
 def prerequisites_met(verbose: bool) -> bool:
-    if not ap.is_audacity_running:
+    if not ap.is_audacity_running():
         if verbose:
             print("No filename passed, Audacity not running. Quitting.")
         return False
@@ -217,7 +220,13 @@ def prerequisites_met(verbose: bool) -> bool:
 
 
 def rebuild(
-    filename=None, verbose=False, label=False, check=False, save=True, deep=False
+    filename=None,
+    verbose=False,
+    label=False,
+    check=False,
+    save=True,
+    deep=False,
+    force=False,
 ):
     if check:
         check_label_age(filename, verbose, deep=deep)
@@ -302,14 +311,82 @@ def rebuild(
                 )
 
     elif prerequisites_met(verbose):
-        if af.get_selected_label_track_indices():
-            if verbose:
-                print("exporting selected label track")
-            af.export_selected_label_tracks_via_getinfo()
+        _export_open_project_labels(verbose, force)
+
+
+def _export_open_project_labels(verbose, force=False):
+    """No-arg export: write the open project's label tracks as versioned .txt.
+
+    Writes only into the current directory, and never anywhere else — these are
+    the source-of-truth files. When cwd is not the project's own directory:
+    point at where Audacity's Open Recent says it lives and export nothing (the
+    user should cd there); or, when nothing can be suggested, say so and export
+    into cwd anyway rather than block. ``force`` overrides the refusal and
+    exports into cwd even when the project appears to live elsewhere.
+    """
+    stem = af.open_project_wave_stem()
+    cwd = Path.cwd()
+    if not af.dir_holds_project(cwd, stem):
+        candidates = af.find_recent_project_dirs(stem)
+        if candidates and not force:
+            print(
+                f"The open project '{stem}' is not in the current directory:",
+                file=sys.stderr,
+            )
+            print(f"{_PATH_INDENT}{cwd}", file=sys.stderr)
+            print("It looks like it lives in:", file=sys.stderr)
+            for directory in candidates:
+                print(f"{_PATH_INDENT}{directory}", file=sys.stderr)
+            print(
+                "cd into that directory and run rebuildap again, or pass -f to "
+                "export into the current directory anyway (nothing was exported).",
+                file=sys.stderr,
+            )
+            return
+        if candidates:  # force is set: export here despite the suggestion
+            print(
+                f"-f given: exporting '{stem}' into the current directory:",
+                file=sys.stderr,
+            )
+            print(f"{_PATH_INDENT}{cwd}", file=sys.stderr)
+            print("even though it appears to live in:", file=sys.stderr)
+            for directory in candidates:
+                print(f"{_PATH_INDENT}{directory}", file=sys.stderr)
         else:
-            if verbose:
-                print("exporting all label tracks")
-            af.export_label_tracks_via_getinfo()
+            print(
+                f"Could not locate the project directory for '{stem}' "
+                f"(it is not in Audacity's Open Recent). Exporting into the "
+                f"current directory:",
+                file=sys.stderr,
+            )
+            print(f"{_PATH_INDENT}{cwd}", file=sys.stderr)
+
+    if af.get_selected_label_track_indices():
+        if verbose:
+            print("exporting selected label track")
+        exported = af.export_selected_label_tracks_via_getinfo()
+    else:
+        if verbose:
+            print("exporting all label tracks")
+        exported = af.export_label_tracks_via_getinfo()
+    # Reported unconditionally, not only under -v: a silent export looked
+    # like nothing happened. Names each track and the full path written.
+    _report_exports(exported)
+
+
+def _report_exports(exported):
+    """Print one line per exported label track: its name and the full path written.
+
+    ``exported`` is the ``(track_name, path)`` list returned by the
+    ``export_*_via_getinfo`` functions. An empty list means the project had a
+    label track selected/present but nothing came back to write.
+    """
+    if not exported:
+        print("No label tracks were exported.")
+        return
+    for name, path in exported:
+        print(f"Exported label track '{name}':")
+        print(f"{_PATH_INDENT}{path}")
 
 
 def main():
@@ -348,6 +425,17 @@ def main():
         ),
     )
     parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help=(
+            "For the no-argument export only: export into the current directory "
+            "even when the open project appears to live elsewhere (Open Recent). "
+            "Without it, rebuildap points at where the project is and exports "
+            "nothing. Does not override the never-overwrite rule for a rebuild."
+        ),
+    )
+    parser.add_argument(
         "-V",
         "--version",
         action="version",
@@ -356,6 +444,8 @@ def main():
     args = parser.parse_args()
     if args.deep and not args.check:
         parser.error("--deep only applies with --check/-c.")
+    if args.force and (args.filename or args.check or args.label):
+        parser.error("--force only applies to the no-argument export.")
     rebuild(
         args.filename,
         args.verbose,
@@ -363,6 +453,7 @@ def main():
         args.check,
         save=not args.no_save,
         deep=args.deep,
+        force=args.force,
     )
 
 

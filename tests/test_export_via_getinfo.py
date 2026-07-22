@@ -5,15 +5,20 @@ Audacity. Integration functions (those that actually call ``pa.do``) live in
 ``rebuildap.audacity_funcs`` and are not exercised here.
 """
 
-from rebuildap import _maybe_write_divergent_export
+from pathlib import Path
+
+from rebuildap import _maybe_write_divergent_export, _report_exports
+from rebuildap import audacity_funcs as af
 from rebuildap.audacity_funcs import (
     _derive_label_filename,
     _format_label_line,
     _format_track_txt,
     _label_track_names_by_idx,
     _parse_labels_response,
+    _parse_recent_project_paths,
     _parse_tracks_response,
     _strip_ok_marker,
+    _write_via_getinfo,
 )
 
 
@@ -174,3 +179,93 @@ class TestMaybeWriteDivergentExport:
         )
         assert out_path == tmp_path / "guit.txt"
         assert out_path.read_text() == fresh
+
+
+class TestWriteViaGetinfoReturnsNameAndPath:
+    """`_write_via_getinfo` carries out the track *name* alongside the path it
+    wrote, so callers can report both without re-deriving the name from a
+    filename (which is lossy when a track name contains underscores)."""
+
+    LABELS_RAW = (
+        '\n[ [1, [[0.83, 9.79, "intro"]]],\n'
+        '  [2, [[1.35, 2.83, "C7"]]] ]\nBatchCommand finished: OK\n'
+    )
+    TRACKS_RAW = (
+        '\n[ { "name":"song", "kind":"wave" },\n'
+        '  { "name":"parts", "kind":"label" },\n'
+        '  { "name":"chords", "kind":"label" } ]\n'
+        "BatchCommand finished: OK\n"
+    )
+
+    def _patch_pipe(self, monkeypatch):
+        def fake_do(cmd):
+            return self.LABELS_RAW if "Labels" in cmd else self.TRACKS_RAW
+
+        monkeypatch.setattr(af.pa, "do", fake_do)
+
+    def test_returns_name_path_pairs(self, tmp_path, monkeypatch):
+        self._patch_pipe(monkeypatch)
+        aup3 = tmp_path / "song.aup3"
+        result = _write_via_getinfo([1, 2], aup3_path=aup3)
+        assert result == [
+            ("parts", tmp_path / "parts_song.txt"),
+            ("chords", tmp_path / "chords_song.txt"),
+        ]
+        assert (
+            tmp_path / "parts_song.txt"
+        ).read_text() == "0.830000\t9.790000\tintro\n"
+
+    def test_only_requested_indices_are_written(self, tmp_path, monkeypatch):
+        self._patch_pipe(monkeypatch)
+        aup3 = tmp_path / "song.aup3"
+        result = _write_via_getinfo([2], aup3_path=aup3)
+        assert result == [("chords", tmp_path / "chords_song.txt")]
+        assert not (tmp_path / "parts_song.txt").exists()
+
+
+class TestReportExports:
+    def test_lists_each_track_with_full_path(self, capsys):
+        _report_exports(
+            [
+                ("chords", Path("/a/b/chords_song.txt")),
+                ("parts", Path("/a/b/parts_song.txt")),
+            ]
+        )
+        out = capsys.readouterr().out
+        # Track name and its path on separate lines, path indented for readability.
+        assert "Exported label track 'chords':" in out
+        assert "\n  /a/b/chords_song.txt\n" in out
+        assert "Exported label track 'parts':" in out
+        assert "\n  /a/b/parts_song.txt\n" in out
+
+    def test_empty_reports_nothing_exported(self, capsys):
+        _report_exports([])
+        assert "No label tracks were exported" in capsys.readouterr().out
+
+
+class TestParseRecentProjectPaths:
+    """Extract the Open Recent submenu's .aup3 paths from a GetInfo: Type=Menus
+    response. Regex-scoped, not full-tree JSON: some other menu label carries an
+    invalid escape that breaks strict json.loads on the whole payload."""
+
+    MENUS = (
+        '\n[ { "depth":1, "flags":0, "label":"File", "accel":"" },\n'
+        '  { "depth":1, "flags":1, "label":"Open Recent", "accel":"" },\n'
+        '  { "depth":2, "flags":0, "label":"/projA/song.aup3", "accel":"" },\n'
+        '  { "depth":2, "flags":0, "label":"/projB/other.aup3", "accel":"" },\n'
+        '  { "depth":1, "flags":0, "label":"Close", "accel":"Ctrl+W" },\n'
+        '  { "depth":2, "flags":0, "label":"/elsewhere/not_recent.aup3", "accel":"" } ]\n'
+        "BatchCommand finished: OK\n"
+    )
+
+    def test_extracts_open_recent_paths(self):
+        paths = _parse_recent_project_paths(self.MENUS)
+        assert [str(p) for p in paths] == ["/projA/song.aup3", "/projB/other.aup3"]
+
+    def test_stops_at_next_top_level_menu(self):
+        # An .aup3 label sitting under a *later* depth-1 menu is not a recent file.
+        paths = _parse_recent_project_paths(self.MENUS)
+        assert all("not_recent" not in str(p) for p in paths)
+
+    def test_no_open_recent_returns_empty(self):
+        assert _parse_recent_project_paths('\n[ {"depth":1,"label":"File"} ]\n') == []

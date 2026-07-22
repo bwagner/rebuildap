@@ -227,6 +227,19 @@ saved-as states, since several of the workarounds above rest on it:
   identity — neither via AX nor via `GetInfo`, whose types are only `Commands`,
   `Menus`, `Preferences`, `Tracks`, `Clips`, `Envelopes`, `Labels`, `Boxes`.
   Same-stem projects in different directories are permanently indistinguishable.
+- **But `GetInfo: Type=Menus` does surface full project *paths*** — the **Open
+  Recent** submenu lists recently opened `.aup3` files as absolute-path labels.
+  This is not per-window identity (it is a recency list, not "the file this
+  window holds"), so it does not close the gap above: same-stem projects in
+  different dirs still collide, and a project evicted from the list vanishes.
+  It is enough, though, to *suggest* where the open project lives for the
+  no-argument export — see `find_recent_project_dirs`, which returns the recent
+  ``.aup3`` dirs whose stem matches and that still exist on disk. That list is
+  advisory only: the export always writes into cwd, and when cwd is not the
+  project's own directory it prints these candidates and refuses rather than
+  auto-writing to one (which the same-stem ambiguity could get wrong). (Strict
+  `json.loads` on the whole menu payload fails — some label carries an invalid
+  escape — so the Open Recent section is scraped by a scoped regex.)
 - Saving retitles the window to the new stem.
 - **An *unsaved* project built by importing audio is also titled with that
   audio's stem** — not `Audacity`. Observed 2026-07-18 running `rebuildap -n

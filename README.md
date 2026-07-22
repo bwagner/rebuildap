@@ -57,6 +57,17 @@ There are three ways to call it:
 | an `.aup3` project | its label tracks are exported to individual `.txt` files |
 | nothing | the running Audacity project is used — selected label tracks are exported, or all of them if none are selected |
 
+With no argument the `.txt` files are written **only into the current
+directory** — these are the versioned source of truth, so they are never
+scattered elsewhere. If the current directory is not the open project's own
+directory, rebuildap looks it up in Audacity's **Open Recent** menu and, when it
+finds it, prints where the project lives and asks you to `cd` there — exporting
+nothing (pass `-f` / `--force` to export into the current directory anyway).
+Only when it cannot suggest anywhere does it say so and export into the current
+directory anyway. Each export is reported (the track name, then its full path on
+its own line), so a successful run is never silent and its destination is always
+visible.
+
 After a rebuild the project is saved as `<audio-stem>.aup3` **beside the audio
 file**, not in the current directory, so `-c` has something to check and a crash
 doesn't cost you the rebuild.
@@ -78,7 +89,7 @@ batch runs never stop for a dialog. There's a small precision trade-off:
 ## Usage
 
 ```console
-usage: rebuildap [-h] [-v] [-l] [-c] [-d] [-n] [-V] [filename]
+usage: rebuildap [-h] [-v] [-l] [-c] [-d] [-n] [-f] [-V] [filename]
 
 rebuild Audacity project
 
@@ -99,6 +110,11 @@ options:
   -n, --no-save  Don't save the rebuilt project as <audio-stem>.aup3 beside
                  the audio file. By default it is saved when no .aup3 exists
                  yet; an existing one is never overwritten.
+  -f, --force    For the no-argument export only: export into the current
+                 directory even when the open project appears to live
+                 elsewhere (Open Recent). Without it, rebuildap points at
+                 where the project is and exports nothing. Does not override
+                 the never-overwrite rule for a rebuild.
   -V, --version  show program's version number and exit
 ```
 
