@@ -3,6 +3,8 @@
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -129,6 +131,16 @@ class ProjectAlreadyOpenError(RuntimeError):
     """
 
 
+class QuantizeError(RuntimeError):
+    """The ``-q`` quantize request cannot be carried out as asked.
+
+    Raised for every user-actionable precondition failure: no single label
+    track selected, the named/auto-detected beats reference is missing or
+    ambiguous, the reference is the target itself, or quantize_labels.py cannot
+    be found. The CLI turns it into a clean ``SystemExit`` naming the problem.
+    """
+
+
 # when mod-script-pipe worked out fine:
 RESPONSE_OK = "\nBatchCommand finshed: OK\n"
 
@@ -149,6 +161,22 @@ PROPERTY_VOLUME = "volume"
 SELECT_MODE_SET = "Set"
 SELECT_MODE_ADD = "Add"
 SELECT_MODE_REMOVE = "Remove"
+
+# Scripting commands that move the *focused* track one row and carry the focus
+# with it (Tracks > Move Track Up/Down). Used to restore a re-imported label
+# track to the position its predecessor held.
+CMD_TRACK_MOVE_UP = "TrackMoveUp"
+CMD_TRACK_MOVE_DOWN = "TrackMoveDown"
+
+# Auto-detecting the beats reference track: a label track whose name begins
+# with this is taken to be the beats grid when ``-q`` is given no explicit name.
+BEATS_TRACK_PREFIX = "beat"
+
+# The sister quantize_labels.py script is shelled out to (kept a separate repo
+# so its snapping algorithm stays single-sourced). Expected on $PATH under
+# either name -- the extension is often dropped when symlinking a script in.
+QUANTIZE_SCRIPT_NAMES = ("quantize_labels.py", "quantize_labels")
+QUANTIZE_SCRIPT_URL = "https://github.com/bwagner/quantize_labels"
 
 GET_INFO_TRACKS = "Tracks"
 GET_INFO_JSON = "JSON"
@@ -543,6 +571,30 @@ def focus_track(track: int):
                 pa.do("PrevTrack:")
 
 
+def _track_move_commands(from_index: int, to_index: int) -> List[str]:
+    """The sequence of TrackMove commands that walks a track from one index to
+    another. Pure: ``TrackMoveUp`` for each row it must rise, ``TrackMoveDown``
+    for each it must fall, empty when it is already in place.
+    """
+    if to_index < from_index:
+        return [CMD_TRACK_MOVE_UP] * (from_index - to_index)
+    if to_index > from_index:
+        return [CMD_TRACK_MOVE_DOWN] * (to_index - from_index)
+    return []
+
+
+def move_track_to(from_index: int, to_index: int):
+    """Move the track at ``from_index`` to ``to_index``.
+
+    Focuses the track first, then issues the move commands; each moves the
+    focused track one row and carries the focus with it, so a run of the same
+    command walks it the whole way. Tested (arithmetic offline, move live).
+    """
+    focus_track(from_index)
+    for cmd in _track_move_commands(from_index, to_index):
+        pa.do(f"{cmd}:")
+
+
 def mute_track(track: int):
     """
     Mutes the given track.
@@ -848,9 +900,14 @@ def dir_holds_project(directory: Path, stem: str) -> bool:
     return any(directory.glob(f"*_{stem}.txt"))
 
 
-def open_project_wave_stem() -> str:
-    """The open project's stem: the name of its first wave track, via GetInfo."""
-    tracks = _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
+def open_project_wave_stem(tracks: Optional[List[dict]] = None) -> str:
+    """The open project's stem: the name of its first wave track.
+
+    Fetches tracks via GetInfo unless an already-fetched list is passed, letting
+    a caller that has them avoid a second round-trip.
+    """
+    if tracks is None:
+        tracks = _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
     wave = next((t for t in tracks if t.get("kind") == "wave"), None)
     if wave is None:
         raise RuntimeError("Cannot derive output context: no wave track in project")
@@ -960,6 +1017,201 @@ def export_selected_or_all_label_tracks_via_getinfo(
     """Export the selected label tracks, or all when none is selected. Returns (name, path) pairs."""
     indices = get_selected_label_track_indices() or get_label_track_indices()
     return _write_via_getinfo(indices, aup3_path)
+
+
+# --- quantize a selected label track to a beats track (the `-q` mode) --------
+#
+# Snap the selected label track's boundaries onto the grid of a beats label
+# track already in the project, in place: export both to temp files, hand them
+# to the sister quantize_labels.py, remove the old track, re-import the
+# quantized one under the same name, and move it back to the position the old
+# one held. The quantized result is *also* the new source of truth, so it is
+# handed back to the caller for writing straight to the versioned .txt -- no
+# read-back export from Audacity, and the file and in-project track are
+# identical by construction (built from the same bytes).
+
+
+def _is_beats_track_name(name: str) -> bool:
+    """Whether ``name`` names a beats track for auto-detection purposes."""
+    return name.lower().startswith(BEATS_TRACK_PREFIX)
+
+
+def resolve_quantize_targets(
+    tracks: List[Dict], reference_name: Optional[str] = None
+) -> Tuple[int, str, int, str]:
+    """Decide which track to quantize and which to quantize against.
+
+    Returns ``(target_index, target_name, reference_index, reference_name)``.
+
+    - **target**: the single *selected* label track. Zero or several selected
+      is a :class:`QuantizeError` -- the mode acts on exactly one track.
+    - **reference**: the label track named ``reference_name`` when given, else
+      the sole label track whose name looks like a beats track. Missing,
+      ambiguous, or coinciding with the target all raise :class:`QuantizeError`.
+
+    Pure over the ``tracks`` list, so every branch is exercised offline.
+    """
+    label_tracks = [
+        (i, t) for i, t in enumerate(tracks) if t.get(PROPERTY_KIND) == KIND_LABEL
+    ]
+    selected = [(i, t) for i, t in label_tracks if t.get(PROPERTY_SELECTED)]
+    if not selected:
+        raise QuantizeError(
+            "Select exactly one label track to quantize; none is selected."
+        )
+    if len(selected) > 1:
+        names = ", ".join(t[PROPERTY_NAME] for _, t in selected)
+        raise QuantizeError(
+            f"Select exactly one label track to quantize; {len(selected)} are "
+            f"selected ({names})."
+        )
+    target_index, target = selected[0]
+    target_name = target[PROPERTY_NAME]
+
+    if reference_name is None:
+        beats = [
+            (i, t) for i, t in label_tracks if _is_beats_track_name(t[PROPERTY_NAME])
+        ]
+        if not beats:
+            raise QuantizeError(
+                "No beats label track found to quantize against; name one "
+                "explicitly with -q <track>."
+            )
+        if len(beats) > 1:
+            names = ", ".join(t[PROPERTY_NAME] for _, t in beats)
+            raise QuantizeError(
+                f"Multiple beats label tracks found ({names}); name the one to "
+                "use with -q <track>."
+            )
+        reference_index, reference = beats[0]
+    else:
+        matches = [
+            (i, t) for i, t in label_tracks if t[PROPERTY_NAME] == reference_name
+        ]
+        if not matches:
+            raise QuantizeError(
+                f"No label track named '{reference_name}' to quantize against."
+            )
+        if len(matches) > 1:
+            raise QuantizeError(
+                f"Several label tracks are named '{reference_name}'; cannot tell "
+                "which is the reference."
+            )
+        reference_index, reference = matches[0]
+
+    if reference_index == target_index:
+        raise QuantizeError(
+            f"The selected track '{target_name}' is also the reference beats "
+            "track; select the track to quantize and keep the beats track as "
+            "the reference."
+        )
+    return target_index, target_name, reference_index, reference[PROPERTY_NAME]
+
+
+def locate_quantize_script() -> Path:
+    """Path to quantize_labels.py on ``$PATH`` (either name in
+    :data:`QUANTIZE_SCRIPT_NAMES`). Raises :class:`QuantizeError` naming both
+    when neither is found.
+    """
+    for name in QUANTIZE_SCRIPT_NAMES:
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    raise QuantizeError(
+        "quantize_labels.py not found on $PATH (looked for "
+        f"{' and '.join(QUANTIZE_SCRIPT_NAMES)}). Get it from "
+        f"{QUANTIZE_SCRIPT_URL} and put it on your PATH, e.g. symlink it into a "
+        "directory that is on $PATH."
+    )
+
+
+def quantize_command(
+    script: Path, reference_file: Path, target_file: Path
+) -> List[str]:
+    """The argv to quantize ``target_file`` in place to ``reference_file``'s grid.
+
+    quantize_labels.py takes ``reference_file target_file`` positionally; ``-i``
+    rewrites the target rather than printing to stdout. Run directly -- it is an
+    executable script with a uv shebang, so no interpreter prefix is needed.
+    """
+    return [str(script), "-i", str(reference_file), str(target_file)]
+
+
+def quantize_selected_label_track(
+    reference_name: Optional[str] = None, verbose: bool = False
+) -> Tuple[str, int, str, str]:
+    """Quantize the selected label track to a beats track, in place.
+
+    Returns ``(target_name, target_index, stem, quantized_content)`` -- the
+    quantized track's name, the position it was restored to (now selected), the
+    project stem, and the quantized labels in canonical ``.txt`` form for the
+    caller to write as the versioned source of truth. Raises
+    :class:`QuantizeError` on any precondition failure. See the module section
+    header for the flow.
+    """
+    tracks = get_tracks()
+    target_index, target_name, _reference_index, reference_name = (
+        resolve_quantize_targets(tracks, reference_name)
+    )
+    stem = open_project_wave_stem(tracks)
+    contents = get_label_tracks_content_via_getinfo()
+    script = locate_quantize_script()
+
+    ref_tmp = _write_temp_label_txt(contents[reference_name])
+    target_tmp = _write_temp_label_txt(contents[target_name])
+    try:
+        if verbose:
+            print(
+                f"Quantizing '{target_name}' to '{reference_name}' (via {script.name})."
+            )
+        # quantize_labels rewrites target_tmp in place to the reference grid.
+        subprocess.run(quantize_command(script, ref_tmp, target_tmp), check=True)
+        # The quantized file is the new source of truth: canonicalize it for the
+        # versioned .txt the caller writes, and build the in-project track from
+        # the same bytes -- no read-back export, and the two cannot diverge.
+        quantized_content = _format_track_txt(_labels_from_txt(target_tmp.read_text()))
+        # Order matters: drop the old track first, then re-import, then move the
+        # re-imported track (always appended at the bottom) back to its old row.
+        remove_selected_tracks()
+        make_label_track_from_file(target_tmp, target_name)
+        new_index = get_track_count() - 1
+        move_track_to(new_index, target_index)
+        # make_label_track_from_file restores the prior selection on exit, so
+        # re-select the quantized track by index for the caller.
+        select_tracks([target_index])
+    finally:
+        ref_tmp.unlink(missing_ok=True)
+        target_tmp.unlink(missing_ok=True)
+    return target_name, target_index, stem, quantized_content
+
+
+def _write_temp_label_txt(content: str) -> Path:
+    """Write label ``.txt`` content to a throwaway temp file, returning its path."""
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as tf:
+        tf.write(content)
+        return Path(tf.name)
+
+
+def _labels_from_txt(content: str) -> List[Tuple[float, float, str]]:
+    """Parse ``.txt`` label content into ``(start, end, text)`` tuples.
+
+    Reads the three-field Audacity form quantize_labels emits (``start<TAB>end
+    <TAB>text``, text possibly empty). Blank lines are skipped; a tab inside the
+    text is preserved. Feeding the result back through :func:`_format_track_txt`
+    re-canonicalizes it, so the versioned file matches the export format.
+    """
+    labels: List[Tuple[float, float, str]] = []
+    for line in content.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        start = float(parts[0])
+        end = float(parts[1])
+        text = "\t".join(parts[2:])
+        labels.append((start, end, text))
+    return labels
 
 
 def import_audio(filename: Path):

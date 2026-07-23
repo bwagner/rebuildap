@@ -92,34 +92,46 @@ batch runs never stop for a dialog. There's a small precision trade-off:
 ## Usage
 
 ```console
-usage: rebuildap [-h] [-v] [-l] [-c] [-d] [-n] [-f] [-V] [filename]
+usage: rebuildap [-h] [-v] [-l] [-c] [-d] [-n] [-f] [-q [BEATS_TRACK]] [-V]
+                 [filename]
 
 rebuild Audacity project
 
 positional arguments:
-  filename       Audio to rebuild from, or an .aup3 to export from. Omit to
-                 export the open Audacity project's labels (see Input modes
-                 below).
+  filename              Audio to rebuild from, or an .aup3 to export from.
+                        Omit to export the open Audacity project's labels (see
+                        Input modes below).
 
 options:
-  -h, --help     show this help message and exit
-  -v, --verbose  Enable verbose mode.
-  -l, --label    Import label file.
-  -c, --check    Check whether Audacity file is newer than label files and
-                 show differences.
-  -d, --deep     With -c, compare every label file against the project's label
-                 tracks, even ones newer than the .aup3. Opens Audacity every
-                 run; catches label files rewritten (git checkout, touch)
-                 without changing the project.
-  -n, --no-save  Don't save the rebuilt project as <audio-stem>.aup3 beside
-                 the audio file. By default it is saved when no .aup3 exists
-                 yet; an existing one is never overwritten.
-  -f, --force    For the no-argument export only: export into the current
-                 directory even when the open project appears to live
-                 elsewhere (Open Recent). Without it, rebuildap points at
-                 where the project is and exports nothing. Does not override
-                 the never-overwrite rule for a rebuild.
-  -V, --version  show program's version number and exit
+  -h, --help            show this help message and exit
+  -v, --verbose         Enable verbose mode.
+  -l, --label           Import label file.
+  -c, --check           Check whether Audacity file is newer than label files
+                        and show differences.
+  -d, --deep            With -c, compare every label file against the
+                        project's label tracks, even ones newer than the
+                        .aup3. Opens Audacity every run; catches label files
+                        rewritten (git checkout, touch) without changing the
+                        project.
+  -n, --no-save         Don't save the rebuilt project as <audio-stem>.aup3
+                        beside the audio file. By default it is saved when no
+                        .aup3 exists yet; an existing one is never
+                        overwritten.
+  -f, --force           For the no-argument export only: export into the
+                        current directory even when the open project appears
+                        to live elsewhere (Open Recent). Without it, rebuildap
+                        points at where the project is and exports nothing.
+                        Does not override the never-overwrite rule for a
+                        rebuild.
+  -q, --quantize [BEATS_TRACK]
+                        Quantize the selected label track in the open project
+                        to a beats label track already in it, in place: the
+                        boundaries snap to the beats grid, the track is re-
+                        imported at its original position, and its versioned
+                        .txt is updated to match. Give a track name to pick
+                        the reference, or omit it to auto-detect the beats
+                        track.
+  -V, --version         show program's version number and exit
 
 Input modes:
   audio file   imported; matching *_<stem>.txt become label tracks

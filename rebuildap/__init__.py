@@ -19,6 +19,10 @@ rebuildap.py song.mp3
 # Indent for a path printed on its own line, so long paths stay readable.
 _PATH_INDENT = "  "
 
+# Sentinel for a bare ``-q`` (no track named): auto-detect the beats reference
+# track. Distinct from ``-q <name>`` (the string) and no ``-q`` at all (None).
+_QUANTIZE_AUTODETECT = object()
+
 
 def process_lines(lines):
     """Normalize label lines to the shared canonical form for comparison.
@@ -258,9 +262,13 @@ def rebuild(
     save=True,
     deep=False,
     force=False,
+    quantize=None,
 ):
     if check:
         check_label_age(filename, verbose, deep=deep)
+    elif quantize is not None:
+        # Operates on the open project, no filename (guarded in main()).
+        _quantize_open_project(quantize, verbose)
     elif filename:
         filename = Path(filename)
         if label:
@@ -345,52 +353,66 @@ def rebuild(
         _export_open_project_labels(verbose, force)
 
 
+def _resolve_export_dir(stem, force=False):
+    """Where the open project's versioned ``.txt`` files may be written, or
+    ``None`` to refuse.
+
+    These are the source-of-truth files, so they only ever go into the current
+    directory. When cwd is not the project's own directory: point at where
+    Audacity's Open Recent says it lives and refuse (return ``None``) so the
+    user cd's there; ``force`` overrides that and returns cwd anyway; and when
+    nothing can be suggested, warn but fall back to cwd rather than block.
+    Messaging goes to stderr. Shared by the no-arg export and ``-q``.
+    """
+    cwd = Path.cwd()
+    if af.dir_holds_project(cwd, stem):
+        return cwd
+    candidates = af.find_recent_project_dirs(stem)
+    if candidates and not force:
+        print(
+            f"The open project '{stem}' is not in the current directory:",
+            file=sys.stderr,
+        )
+        print(f"{_PATH_INDENT}{cwd}", file=sys.stderr)
+        print("It looks like it lives in:", file=sys.stderr)
+        for directory in candidates:
+            print(f"{_PATH_INDENT}{directory}", file=sys.stderr)
+        print(
+            "cd into that directory and run rebuildap again, or pass -f to "
+            "export into the current directory anyway (nothing was exported).",
+            file=sys.stderr,
+        )
+        return None
+    if candidates:  # force is set: use cwd despite the suggestion
+        print(
+            f"-f given: exporting '{stem}' into the current directory:",
+            file=sys.stderr,
+        )
+        print(f"{_PATH_INDENT}{cwd}", file=sys.stderr)
+        print("even though it appears to live in:", file=sys.stderr)
+        for directory in candidates:
+            print(f"{_PATH_INDENT}{directory}", file=sys.stderr)
+        return cwd
+    print(
+        f"Could not locate the project directory for '{stem}' "
+        f"(it is not in Audacity's Open Recent). Exporting into the "
+        f"current directory:",
+        file=sys.stderr,
+    )
+    print(f"{_PATH_INDENT}{cwd}", file=sys.stderr)
+    return cwd
+
+
 def _export_open_project_labels(verbose, force=False):
     """No-arg export: write the open project's label tracks as versioned .txt.
 
     Writes only into the current directory, and never anywhere else — these are
-    the source-of-truth files. When cwd is not the project's own directory:
-    point at where Audacity's Open Recent says it lives and export nothing (the
-    user should cd there); or, when nothing can be suggested, say so and export
-    into cwd anyway rather than block. ``force`` overrides the refusal and
-    exports into cwd even when the project appears to live elsewhere.
+    the source-of-truth files. The cwd/project-dir decision (and ``-f``) lives
+    in :func:`_resolve_export_dir`; a ``None`` result means refuse.
     """
     stem = af.open_project_wave_stem()
-    cwd = Path.cwd()
-    if not af.dir_holds_project(cwd, stem):
-        candidates = af.find_recent_project_dirs(stem)
-        if candidates and not force:
-            print(
-                f"The open project '{stem}' is not in the current directory:",
-                file=sys.stderr,
-            )
-            print(f"{_PATH_INDENT}{cwd}", file=sys.stderr)
-            print("It looks like it lives in:", file=sys.stderr)
-            for directory in candidates:
-                print(f"{_PATH_INDENT}{directory}", file=sys.stderr)
-            print(
-                "cd into that directory and run rebuildap again, or pass -f to "
-                "export into the current directory anyway (nothing was exported).",
-                file=sys.stderr,
-            )
-            return
-        if candidates:  # force is set: export here despite the suggestion
-            print(
-                f"-f given: exporting '{stem}' into the current directory:",
-                file=sys.stderr,
-            )
-            print(f"{_PATH_INDENT}{cwd}", file=sys.stderr)
-            print("even though it appears to live in:", file=sys.stderr)
-            for directory in candidates:
-                print(f"{_PATH_INDENT}{directory}", file=sys.stderr)
-        else:
-            print(
-                f"Could not locate the project directory for '{stem}' "
-                f"(it is not in Audacity's Open Recent). Exporting into the "
-                f"current directory:",
-                file=sys.stderr,
-            )
-            print(f"{_PATH_INDENT}{cwd}", file=sys.stderr)
+    if _resolve_export_dir(stem, force) is None:
+        return
 
     if af.get_selected_label_track_indices():
         if verbose:
@@ -403,6 +425,42 @@ def _export_open_project_labels(verbose, force=False):
     # Reported unconditionally, not only under -v: a silent export looked
     # like nothing happened. Names each track and the full path written.
     _report_exports(exported)
+
+
+def _quantize_open_project(quantize, verbose):
+    """Quantize the selected label track to a beats track, in place, then persist.
+
+    ``quantize`` is the CLI value: :data:`_QUANTIZE_AUTODETECT` for a bare ``-q``
+    (find the beats track), or a track name from ``-q <name>``. The selected
+    label track is snapped to that beats grid and re-imported at its original
+    position; the quantized labels come back in hand and are written straight to
+    the versioned ``.txt`` (no read-back export), obeying the same cwd/project-dir
+    rule as the no-arg export. The in-project swap has already happened even when
+    the file is not written (wrong directory), so that case is reported, not
+    silently dropped.
+    """
+    reference_name = None if quantize is _QUANTIZE_AUTODETECT else quantize
+    if not prerequisites_met(verbose):
+        return
+    try:
+        target_name, _target_index, stem, content = af.quantize_selected_label_track(
+            reference_name, verbose
+        )
+    except af.QuantizeError as e:
+        raise SystemExit(f"{e}") from e
+
+    out_dir = _resolve_export_dir(stem)
+    if out_dir is None:
+        print(
+            f"Quantized label track '{target_name}' in the project, but did not "
+            "write its label file (see above). cd into the project directory and "
+            "run `rebuildap` to export it."
+        )
+        return
+    out_path = out_dir / af._derive_label_filename(target_name, stem)
+    out_path.write_text(content)
+    print(f"Quantized label track '{target_name}':")
+    print(f"{_PATH_INDENT}{out_path}")
 
 
 def _report_exports(exported):
@@ -483,6 +541,21 @@ def main():
         ),
     )
     parser.add_argument(
+        "-q",
+        "--quantize",
+        nargs="?",
+        const=_QUANTIZE_AUTODETECT,
+        default=None,
+        metavar="BEATS_TRACK",
+        help=(
+            "Quantize the selected label track in the open project to a beats "
+            "label track already in it, in place: the boundaries snap to the "
+            "beats grid, the track is re-imported at its original position, and "
+            "its versioned .txt is updated to match. Give a track name to pick "
+            "the reference, or omit it to auto-detect the beats track."
+        ),
+    )
+    parser.add_argument(
         "-V",
         "--version",
         action="version",
@@ -493,6 +566,10 @@ def main():
         parser.error("--deep only applies with --check/-c.")
     if args.force and (args.filename or args.check or args.label):
         parser.error("--force only applies to the no-argument export.")
+    if args.quantize is not None and (args.filename or args.check or args.label):
+        parser.error(
+            "--quantize operates on the open project; not with a filename, -c, or -l."
+        )
     rebuild(
         args.filename,
         args.verbose,
@@ -501,6 +578,7 @@ def main():
         save=not args.no_save,
         deep=args.deep,
         force=args.force,
+        quantize=args.quantize,
     )
 
 
