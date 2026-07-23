@@ -1139,15 +1139,20 @@ def quantize_command(
 
 def quantize_selected_label_track(
     reference_name: Optional[str] = None, verbose: bool = False
-) -> Tuple[str, int, str, str]:
+) -> Tuple[str, int, str, str, bool]:
     """Quantize the selected label track to a beats track, in place.
 
-    Returns ``(target_name, target_index, stem, quantized_content)`` -- the
-    quantized track's name, the position it was restored to (now selected), the
-    project stem, and the quantized labels in canonical ``.txt`` form for the
-    caller to write as the versioned source of truth. Raises
-    :class:`QuantizeError` on any precondition failure. See the module section
-    header for the flow.
+    Returns ``(target_name, target_index, stem, quantized_content, changed)`` --
+    the quantized track's name, the position it was restored to, the project
+    stem, the quantized labels in canonical ``.txt`` form (for the caller to
+    write as the versioned source of truth), and whether the project was
+    actually modified. Raises :class:`QuantizeError` on any precondition failure.
+    See the module section header for the flow.
+
+    When the track is *already* on the grid, the quantized content equals the
+    track's current content, so the remove/import/move swap is skipped entirely
+    -- the project is left byte-identical (no ``.aup3`` mtime bump, no undo
+    churn) and ``changed`` is ``False``.
     """
     tracks = get_tracks()
     target_index, target_name, _reference_index, reference_name = (
@@ -1164,25 +1169,44 @@ def quantize_selected_label_track(
             print(
                 f"Quantizing '{target_name}' to '{reference_name}' (via {script.name})."
             )
-        # quantize_labels rewrites target_tmp in place to the reference grid.
-        subprocess.run(quantize_command(script, ref_tmp, target_tmp), check=True)
+        # quantize_labels rewrites target_tmp in place to the reference grid. Its
+        # own summary ("Total adjustment ...", "Already quantized ...") is
+        # captured so it does not bleed into rebuildap's output; shown only under
+        # -v, and surfaced in full if the script fails.
+        try:
+            result = subprocess.run(
+                quantize_command(script, ref_tmp, target_tmp),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise QuantizeError(
+                f"quantize_labels failed (exit {e.returncode}):\n{e.stderr}"
+            ) from e
+        if verbose and result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
         # The quantized file is the new source of truth: canonicalize it for the
         # versioned .txt the caller writes, and build the in-project track from
         # the same bytes -- no read-back export, and the two cannot diverge.
         quantized_content = _format_track_txt(_labels_from_txt(target_tmp.read_text()))
-        # Order matters: drop the old track first, then re-import, then move the
-        # re-imported track (always appended at the bottom) back to its old row.
-        remove_selected_tracks()
-        make_label_track_from_file(target_tmp, target_name)
-        new_index = get_track_count() - 1
-        move_track_to(new_index, target_index)
-        # make_label_track_from_file restores the prior selection on exit, so
-        # re-select the quantized track by index for the caller.
-        select_tracks([target_index])
+        # Both sides are canonical (contents[...] comes from _format_track_txt
+        # too), so a plain compare tells whether quantizing changed anything.
+        changed = quantized_content != contents[target_name]
+        if changed:
+            # Order matters: drop the old track first, then re-import, then move
+            # the re-imported track (always appended at the bottom) to its old row.
+            remove_selected_tracks()
+            make_label_track_from_file(target_tmp, target_name)
+            new_index = get_track_count() - 1
+            move_track_to(new_index, target_index)
+            # make_label_track_from_file restores the prior selection on exit, so
+            # re-select the quantized track by index for the caller.
+            select_tracks([target_index])
     finally:
         ref_tmp.unlink(missing_ok=True)
         target_tmp.unlink(missing_ok=True)
-    return target_name, target_index, stem, quantized_content
+    return target_name, target_index, stem, quantized_content, changed
 
 
 def _write_temp_label_txt(content: str) -> Path:

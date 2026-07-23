@@ -10,12 +10,18 @@ Only the live pipe round-trip is left to the ``audacity``-marked suite.
 """
 
 import subprocess
+import types
 from pathlib import Path
 
 import pytest
 
 import rebuildap
 from rebuildap import audacity_funcs as af
+
+
+def _run_result(stderr="", stdout=""):
+    """Stand-in for the CompletedProcess quantize_selected_label_track reads."""
+    return types.SimpleNamespace(stderr=stderr, stdout=stdout)
 
 
 def _track(name, kind="label", selected=False):
@@ -174,14 +180,22 @@ def test_quantize_swaps_track_in_the_safe_order(monkeypatch, tmp_path):
     monkeypatch.setattr(
         af,
         "get_label_tracks_content_via_getinfo",
-        lambda: {"chords": "0.0\t0.0\ta\n", "beats": "0.1\t0.1\t\n"},
+        # 'chords' currently off the grid at 0.12; quantizing will move it.
+        lambda: {
+            "chords": af._format_track_txt([(0.12, 0.12, "a")]),
+            "beats": af._format_track_txt([(0.0, 0.0, "")]),
+        },
     )
     script = tmp_path / "quantize_labels.py"
     script.write_text("#!/usr/bin/env python\n")
     monkeypatch.setattr(af, "locate_quantize_script", lambda: script)
-    monkeypatch.setattr(
-        subprocess, "run", lambda *a, **k: events.append("quantize") or None
-    )
+
+    def fake_run(argv, **k):
+        events.append("quantize")
+        Path(argv[-1]).write_text("0.0\t0.0\ta\n")  # snapped 0.12 -> 0.0
+        return _run_result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(af, "remove_selected_tracks", lambda: events.append("remove"))
     monkeypatch.setattr(
         af,
@@ -195,13 +209,11 @@ def test_quantize_swaps_track_in_the_safe_order(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(af, "select_tracks", lambda idx: events.append(f"select:{idx}"))
 
-    target_name, target_index, stem, content = af.quantize_selected_label_track(
-        reference_name=None
+    target_name, target_index, stem, content, changed = (
+        af.quantize_selected_label_track(reference_name=None)
     )
 
-    assert target_name == "chords"
-    assert target_index == 1
-    assert stem == "song"
+    assert (target_name, target_index, stem, changed) == ("chords", 1, "song", True)
     # The quantized content is handed back canonicalized (6-decimal), from the
     # same bytes that were imported -- no read-back export from Audacity.
     assert content == af._format_track_txt([(0.0, 0.0, "a")])
@@ -212,6 +224,41 @@ def test_quantize_swaps_track_in_the_safe_order(monkeypatch, tmp_path):
         "move:2->1",
         "select:[1]",
     ]
+
+
+def test_quantize_skips_the_swap_when_already_quantized(monkeypatch, tmp_path):
+    """An already-on-grid track: no remove/import/move, project left untouched,
+    and changed is False."""
+    events = []
+    current = af._format_track_txt([(0.0, 1.0, "a")])  # already on the grid
+    tracks = [
+        _track("song", kind="wave"),
+        _track("chords", selected=True),
+        _track("beats"),
+    ]
+    monkeypatch.setattr(af, "get_tracks", lambda: tracks)
+    monkeypatch.setattr(
+        af,
+        "get_label_tracks_content_via_getinfo",
+        lambda: {"chords": current, "beats": af._format_track_txt([(0.0, 0.0, "")])},
+    )
+    monkeypatch.setattr(af, "locate_quantize_script", lambda: tmp_path / "q.py")
+    # quantize reports "no change": leaves the target temp exactly as written.
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _run_result())
+    for name in ("remove_selected_tracks",):
+        monkeypatch.setattr(af, name, lambda: events.append("remove"))
+    monkeypatch.setattr(
+        af, "make_label_track_from_file", lambda *a, **k: events.append("import")
+    )
+    monkeypatch.setattr(af, "get_track_count", lambda: 3)
+    monkeypatch.setattr(af, "move_track_to", lambda *a: events.append("move"))
+    monkeypatch.setattr(af, "select_tracks", lambda *a: events.append("select"))
+
+    _, _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
+
+    assert changed is False
+    assert events == [], "already-quantized track must not touch the project"
+    assert content == current
 
 
 # --- canonicalizing the quantized result for the versioned .txt -------------
@@ -247,6 +294,7 @@ def test_quantized_content_is_canonical_six_decimal(monkeypatch, tmp_path):
     # (its path is the last positional of the argv).
     def fake_run(argv, **kwargs):
         Path(argv[-1]).write_text("0.0\t1.0\tverse\n")
+        return _run_result()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(af, "remove_selected_tracks", lambda: None)
@@ -255,56 +303,228 @@ def test_quantized_content_is_canonical_six_decimal(monkeypatch, tmp_path):
     monkeypatch.setattr(af, "move_track_to", lambda *a: None)
     monkeypatch.setattr(af, "select_tracks", lambda *a: None)
 
-    _, _, _, content = af.quantize_selected_label_track(reference_name="beats")
+    _, _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
     assert content == "0.000000\t1.000000\tverse\n"
+
+
+# --- quantize_labels output is captured, surfaced only under -v / on failure -
+
+
+def _stub_orchestrator_env(monkeypatch, tmp_path, run):
+    """Fake everything quantize_selected_label_track touches except ``run``."""
+    tracks = [
+        _track("song", kind="wave"),
+        _track("chords", selected=True),
+        _track("beats"),
+    ]
+    monkeypatch.setattr(af, "get_tracks", lambda: tracks)
+    monkeypatch.setattr(
+        af,
+        "get_label_tracks_content_via_getinfo",
+        lambda: {"chords": "0.0\t0.0\ta\n", "beats": "0.1\t0.1\t\n"},
+    )
+    monkeypatch.setattr(af, "locate_quantize_script", lambda: tmp_path / "q.py")
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(af, "remove_selected_tracks", lambda: None)
+    monkeypatch.setattr(af, "make_label_track_from_file", lambda *a, **k: None)
+    monkeypatch.setattr(af, "get_track_count", lambda: 3)
+    monkeypatch.setattr(af, "move_track_to", lambda *a: None)
+    monkeypatch.setattr(af, "select_tracks", lambda *a: None)
+
+
+def test_quantize_labels_summary_is_hidden_without_verbose(
+    monkeypatch, tmp_path, capsys
+):
+    _stub_orchestrator_env(
+        monkeypatch,
+        tmp_path,
+        lambda *a, **k: _run_result(stderr="Total adjustment: 0\n"),
+    )
+    af.quantize_selected_label_track(reference_name="beats", verbose=False)
+    assert "Total adjustment" not in capsys.readouterr().err
+
+
+def test_quantize_labels_summary_is_shown_under_verbose(monkeypatch, tmp_path, capsys):
+    _stub_orchestrator_env(
+        monkeypatch,
+        tmp_path,
+        lambda *a, **k: _run_result(stderr="Total adjustment: 0\n"),
+    )
+    af.quantize_selected_label_track(reference_name="beats", verbose=True)
+    assert "Total adjustment" in capsys.readouterr().err
+
+
+def test_quantize_labels_failure_becomes_a_quantize_error(monkeypatch, tmp_path):
+    def boom(*a, **k):
+        raise subprocess.CalledProcessError(1, "q.py", stderr="line 3: not a label")
+
+    _stub_orchestrator_env(monkeypatch, tmp_path, boom)
+    with pytest.raises(af.QuantizeError, match="line 3: not a label"):
+        af.quantize_selected_label_track(reference_name="beats")
+
+
+# --- resolving where -q writes the versioned .txt ---------------------------
+
+
+def test_resolve_quantize_dir_prefers_cwd_when_it_holds_the_project(
+    monkeypatch, tmp_path
+):
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    assert rb._resolve_quantize_dir("song") == tmp_path
+
+
+def test_resolve_quantize_dir_uses_the_sole_recent_project_dir(monkeypatch, tmp_path):
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)  # cwd does not hold the project
+    proj = tmp_path / "proj"
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [proj])
+    assert rb._resolve_quantize_dir("song") == proj
+
+
+def test_resolve_quantize_dir_refuses_when_ambiguous(monkeypatch, tmp_path, capsys):
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        af, "find_recent_project_dirs", lambda _s: [Path("/a"), Path("/b")]
+    )
+    assert rb._resolve_quantize_dir("song") is None
+    err = capsys.readouterr().err
+    assert "/a" in err and "/b" in err
+
+
+def test_resolve_quantize_dir_refuses_when_unknown(monkeypatch, tmp_path, capsys):
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
+    assert rb._resolve_quantize_dir("song") is None
+    assert "not in Audacity's Open Recent" in capsys.readouterr().err
 
 
 # --- persisting the quantized track to the versioned .txt -------------------
 
 
-def _stub_quantize(monkeypatch, stem="song", name="chords", content="0.0\t1.0\tv\n"):
+def _stub_quantize(
+    monkeypatch, stem="song", name="chords", content="0.0\t1.0\tv\n", changed=True
+):
+    """Fake the live layer for _quantize_open_project. Returns a list recording
+    whether the (mutating) quantize step ran, so refusal tests can assert it did
+    not."""
     import rebuildap as rb
 
+    calls = []
     monkeypatch.setattr(rb, "prerequisites_met", lambda _v: True)
-    monkeypatch.setattr(
-        af,
-        "quantize_selected_label_track",
-        lambda ref, verbose: (name, 1, stem, content),
-    )
+    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: stem)
+
+    def fake_quantize(ref, verbose):
+        calls.append("quantized")
+        return (name, 1, stem, content, changed)
+
+    monkeypatch.setattr(af, "quantize_selected_label_track", fake_quantize)
+    return calls
 
 
-def test_quantize_writes_the_versioned_txt_in_the_project_dir(
+def test_quantize_writes_the_versioned_txt_in_cwd_when_it_holds_the_project(
     monkeypatch, tmp_path, capsys
 ):
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "song.aup3").write_text("")  # cwd holds the project
-    _stub_quantize(monkeypatch, stem="song", name="chords", content="0.0\t1.0\tv\n")
+    calls = _stub_quantize(monkeypatch, stem="song", name="chords", content="C\n")
 
     rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
 
     written = tmp_path / "chords_song.txt"
-    assert written.read_text() == "0.0\t1.0\tv\n"
+    assert written.read_text() == "C\n"
+    assert calls == ["quantized"]
     assert str(written) in capsys.readouterr().out
 
 
-def test_quantize_does_not_write_when_cwd_is_not_the_project_dir(
+def test_quantize_writes_to_the_discovered_project_dir_from_any_cwd(
     monkeypatch, tmp_path, capsys
 ):
-    """The in-project swap still happened, but with no .txt written the run says
-    so instead of silently dropping it."""
+    """The whole point: run from anywhere, the .txt lands in the project's own
+    directory (found via Open Recent), not cwd."""
     import rebuildap as rb
 
-    monkeypatch.chdir(tmp_path)  # empty: not the project dir
-    _stub_quantize(monkeypatch, stem="song", name="chords")
-    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [Path("/elsewhere")])
+    cwd = tmp_path / "elsewhere"
+    proj = tmp_path / "batch01" / "song"
+    cwd.mkdir()
+    proj.mkdir(parents=True)
+    monkeypatch.chdir(cwd)  # not the project dir
+    calls = _stub_quantize(monkeypatch, stem="song", name="chords", content="C\n")
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [proj])
 
     rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
 
+    assert (proj / "chords_song.txt").read_text() == "C\n"
+    assert not (cwd / "chords_song.txt").exists()
+    assert calls == ["quantized"]
+
+
+def test_quantize_refuses_before_mutating_when_project_dir_unknown(
+    monkeypatch, tmp_path, capsys
+):
+    """No writable directory -> refuse *before* touching the project, so there is
+    no quantized-but-unpersisted half-state."""
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)  # not the project dir
+    calls = _stub_quantize(monkeypatch, stem="song", name="chords")
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
+
+    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+
+    assert calls == [], "must not quantize when it cannot persist the result"
     assert not (tmp_path / "chords_song.txt").exists()
-    out = capsys.readouterr().out
-    assert "did not" in out.lower()
+    assert "Could not locate" in capsys.readouterr().err
+
+
+def test_quantize_does_not_rewrite_an_already_current_file(
+    monkeypatch, tmp_path, capsys
+):
+    """Already-quantized track + up-to-date file -> nothing to do, file untouched
+    (not even reformatted)."""
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    existing = tmp_path / "chords_song.txt"
+    existing.write_text("0.0\t1.0\tv\n")  # bare floats, equivalent to canonical
+    _stub_quantize(
+        monkeypatch, name="chords", content="0.000000\t1.000000\tv\n", changed=False
+    )
+
+    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+
+    assert existing.read_text() == "0.0\t1.0\tv\n", "equivalent file must be untouched"
+    assert "already quantized; nothing to do" in capsys.readouterr().out
+
+
+def test_quantize_updates_a_stale_file_even_if_the_track_was_already_quantized(
+    monkeypatch, tmp_path, capsys
+):
+    """Track already on grid, but its versioned file is stale -> write it anyway."""
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    existing = tmp_path / "chords_song.txt"
+    existing.write_text("9.9\t9.9\tstale\n")
+    _stub_quantize(
+        monkeypatch, name="chords", content="0.000000\t1.000000\tv\n", changed=False
+    )
+
+    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+
+    assert existing.read_text() == "0.000000\t1.000000\tv\n"
+    assert "was already quantized; updated its file" in capsys.readouterr().out
 
 
 # --- CLI parsing and usage guards -------------------------------------------

@@ -427,6 +427,42 @@ def _export_open_project_labels(verbose, force=False):
     _report_exports(exported)
 
 
+def _resolve_quantize_dir(stem):
+    """Directory for ``-q``'s versioned ``.txt`` -- the open project's own directory.
+
+    Unlike the no-arg export (which only ever writes cwd), ``-q`` writes to
+    wherever the project actually lives, so the file and the just-quantized
+    project stay consistent no matter what cwd the command was run from: cwd when
+    it holds the project, else the single directory Audacity's Open Recent
+    reports for this stem. Refuses (returns ``None``, explaining on stderr) when
+    that directory is ambiguous (same stem in several places) or unknown, so a
+    source-of-truth file is never scattered.
+    """
+    cwd = Path.cwd()
+    if af.dir_holds_project(cwd, stem):
+        return cwd
+    candidates = af.find_recent_project_dirs(stem)
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        print(
+            f"The open project '{stem}' lives in more than one place; cannot tell "
+            "which to update:",
+            file=sys.stderr,
+        )
+        for directory in candidates:
+            print(f"{_PATH_INDENT}{directory}", file=sys.stderr)
+        print("cd into the right one and run `rebuildap -q` there.", file=sys.stderr)
+        return None
+    print(
+        f"Could not locate the directory of the open project '{stem}' (it is not "
+        "in Audacity's Open Recent), so its label file cannot be written. cd into "
+        "the project directory and run `rebuildap -q` there.",
+        file=sys.stderr,
+    )
+    return None
+
+
 def _quantize_open_project(quantize, verbose):
     """Quantize the selected label track to a beats track, in place, then persist.
 
@@ -434,33 +470,66 @@ def _quantize_open_project(quantize, verbose):
     (find the beats track), or a track name from ``-q <name>``. The selected
     label track is snapped to that beats grid and re-imported at its original
     position; the quantized labels come back in hand and are written straight to
-    the versioned ``.txt`` (no read-back export), obeying the same cwd/project-dir
-    rule as the no-arg export. The in-project swap has already happened even when
-    the file is not written (wrong directory), so that case is reported, not
-    silently dropped.
+    the project's own directory (no read-back export).
+
+    The write directory is resolved *before* the project is touched, so a
+    location we cannot write to is a clean refusal rather than a quantized-but-
+    unpersisted half-state.
     """
     reference_name = None if quantize is _QUANTIZE_AUTODETECT else quantize
     if not prerequisites_met(verbose):
         return
+    stem = af.open_project_wave_stem()
+    out_dir = _resolve_quantize_dir(stem)
+    if out_dir is None:
+        return
     try:
-        target_name, _target_index, stem, content = af.quantize_selected_label_track(
+        target_name, _idx, _stem, content, changed = af.quantize_selected_label_track(
             reference_name, verbose
         )
     except af.QuantizeError as e:
         raise SystemExit(f"{e}") from e
-
-    out_dir = _resolve_export_dir(stem)
-    if out_dir is None:
-        print(
-            f"Quantized label track '{target_name}' in the project, but did not "
-            "write its label file (see above). cd into the project directory and "
-            "run `rebuildap` to export it."
-        )
-        return
     out_path = out_dir / af._derive_label_filename(target_name, stem)
+    wrote = _write_if_divergent(out_path, content)
+    _report_quantize_outcome(target_name, out_path, changed, wrote)
+
+
+def _write_if_divergent(out_path, content):
+    """Write ``content`` to ``out_path`` unless the file already holds equivalent
+    labels. Returns True iff it wrote.
+
+    Equivalence uses the same normalization ``-c`` compares with
+    (:func:`process_lines` -> ``cut_trailing_zeros``), so a file that differs only
+    in float formatting is left untouched -- source-of-truth files are never
+    rewritten with identical content.
+    """
+    if out_path.exists():
+        existing = process_lines(out_path.read_text().splitlines(keepends=True))
+        incoming = process_lines(content.splitlines(keepends=True))
+        if existing == incoming:
+            return False
     out_path.write_text(content)
-    print(f"Quantized label track '{target_name}':")
-    print(f"{_PATH_INDENT}{out_path}")
+    return True
+
+
+def _report_quantize_outcome(target_name, out_path, changed, wrote):
+    """State plainly what ``-q`` did, across the four project-changed/file-written
+    combinations -- so an already-quantized track reads as 'nothing to do', not as
+    a silent success."""
+    if changed and wrote:
+        print(f"Quantized label track '{target_name}':")
+        print(f"{_PATH_INDENT}{out_path}")
+    elif not changed and not wrote:
+        print(f"Label track '{target_name}' is already quantized; nothing to do.")
+    elif not changed and wrote:
+        # Track was already on the grid, but its versioned file was stale.
+        print(f"Label track '{target_name}' was already quantized; updated its file:")
+        print(f"{_PATH_INDENT}{out_path}")
+    else:  # changed and not wrote
+        print(
+            f"Quantized label track '{target_name}'; its label file was already "
+            "up to date."
+        )
 
 
 def _report_exports(exported):
