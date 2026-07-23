@@ -268,7 +268,7 @@ def rebuild(
         check_label_age(filename, verbose, deep=deep)
     elif quantize is not None:
         # Operates on the open project, no filename (guarded in main()).
-        _quantize_open_project(quantize, verbose)
+        _quantize_open_project(quantize, verbose, force)
     elif filename:
         filename = Path(filename)
         if label:
@@ -463,14 +463,16 @@ def _resolve_quantize_dir(stem):
     return None
 
 
-def _quantize_open_project(quantize, verbose):
+def _quantize_open_project(quantize, verbose, force=False):
     """Quantize the selected label track to a beats track, in place, then persist.
 
     ``quantize`` is the CLI value: :data:`_QUANTIZE_AUTODETECT` for a bare ``-q``
-    (find the beats track), or a track name from ``-q <name>``. The selected
-    label track is snapped to that beats grid and re-imported at its original
-    position; the quantized labels come back in hand and are written straight to
-    the project's own directory (no read-back export).
+    (find the beats track), or a track name from ``-q <name>``. Only boundaries
+    inside the current time selection are snapped (whole track when nothing is
+    selected); ``force`` (``-f``) quantizes the whole track without reading the
+    selection, and is the escape hatch the message points at when the selection
+    cannot be read. The quantized labels are written straight to the project's
+    own directory (no read-back export).
 
     The write directory is resolved *before* the project is touched, so a
     location we cannot write to is a clean refusal rather than a quantized-but-
@@ -485,8 +487,13 @@ def _quantize_open_project(quantize, verbose):
         return
     try:
         target_name, _idx, _stem, content, changed = af.quantize_selected_label_track(
-            reference_name, verbose
+            reference_name, verbose, whole_track=force
         )
+    except af.SelectionReadError as e:
+        raise SystemExit(
+            f"Could not read the Audacity selection: {e} Re-run with -f to "
+            "quantize the whole track."
+        ) from e
     except af.QuantizeError as e:
         raise SystemExit(f"{e}") from e
     out_path = out_dir / af._derive_label_filename(target_name, stem)
@@ -603,10 +610,10 @@ def main():
         "--force",
         action="store_true",
         help=(
-            "For the no-argument export only: export into the current directory "
-            "even when the open project appears to live elsewhere (Open Recent). "
-            "Without it, rebuildap points at where the project is and exports "
-            "nothing. Does not override the never-overwrite rule for a rebuild."
+            "Force. For the no-argument export: export into the current "
+            "directory even when the open project appears to live elsewhere "
+            "(Open Recent). For -q: quantize the whole track instead of only the "
+            "current time selection. Does not override the never-overwrite rule."
         ),
     )
     parser.add_argument(
@@ -618,10 +625,11 @@ def main():
         metavar="BEATS_TRACK",
         help=(
             "Quantize the selected label track in the open project to a beats "
-            "label track already in it, in place: the boundaries snap to the "
-            "beats grid, the track is re-imported at its original position, and "
-            "its versioned .txt is updated to match. Give a track name to pick "
-            "the reference, or omit it to auto-detect the beats track."
+            "label track already in it, in place: label boundaries inside the "
+            "current time selection snap to the beats grid (the whole track when "
+            "nothing is selected, or with -f), the track is re-imported at its "
+            "original position, and its versioned .txt is updated to match. Give "
+            "a track name to pick the reference, or omit it to auto-detect it."
         ),
     )
     parser.add_argument(
@@ -634,7 +642,7 @@ def main():
     if args.deep and not args.check:
         parser.error("--deep only applies with --check/-c.")
     if args.force and (args.filename or args.check or args.label):
-        parser.error("--force only applies to the no-argument export.")
+        parser.error("--force applies only to the no-argument export or -q.")
     if args.quantize is not None and (args.filename or args.check or args.label):
         parser.error(
             "--quantize operates on the open project; not with a filename, -c, or -l."

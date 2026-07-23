@@ -189,6 +189,7 @@ def test_quantize_swaps_track_in_the_safe_order(monkeypatch, tmp_path):
     script = tmp_path / "quantize_labels.py"
     script.write_text("#!/usr/bin/env python\n")
     monkeypatch.setattr(af, "locate_quantize_script", lambda: script)
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))  # whole track
 
     def fake_run(argv, **k):
         events.append("quantize")
@@ -243,6 +244,7 @@ def test_quantize_skips_the_swap_when_already_quantized(monkeypatch, tmp_path):
         lambda: {"chords": current, "beats": af._format_track_txt([(0.0, 0.0, "")])},
     )
     monkeypatch.setattr(af, "locate_quantize_script", lambda: tmp_path / "q.py")
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))  # whole track
     # quantize reports "no change": leaves the target temp exactly as written.
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _run_result())
     for name in ("remove_selected_tracks",):
@@ -273,6 +275,170 @@ def test_labels_from_txt_skips_blank_lines():
     assert af._labels_from_txt("\n0.5\t0.5\tx\n\n") == [(0.5, 0.5, "x")]
 
 
+# --- reading the time selection via Nyquist ---------------------------------
+
+
+def test_nyquist_selection_command_is_the_nil_return_form(tmp_path):
+    """Must use the side-effect/nil-return form (no value returned), or Audacity
+    pops a modal Message dialog that wedges the pipe. Writes to the given path."""
+    path = tmp_path / "sel.txt"
+    cmd = af._nyquist_write_selection_command(path)
+    assert str(path) in cmd
+    assert "(get (quote *selection*) (quote start))" in cmd
+    assert "(get (quote *selection*) (quote end))" in cmd
+    assert cmd.strip().endswith('(close fp))" Version="3"')  # nil-return
+    assert "format nil" not in cmd  # a returned value would trigger the dialog
+
+
+def test_parse_selection_file_reads_two_floats(tmp_path):
+    p = tmp_path / "s.txt"
+    p.write_text("1.70712\n4.44846\n")
+    assert af._parse_selection_file(p) == (1.70712, 4.44846)
+
+
+def test_parse_selection_file_orders_the_bounds(tmp_path):
+    p = tmp_path / "s.txt"
+    p.write_text("4.0\n1.0\n")
+    assert af._parse_selection_file(p) == (1.0, 4.0)
+
+
+def test_parse_selection_file_rejects_non_numeric(tmp_path):
+    p = tmp_path / "s.txt"
+    p.write_text("NIL\nNIL\n")  # accessor missing on this Audacity
+    with pytest.raises(af.SelectionReadError):
+        af._parse_selection_file(p)
+
+
+def test_parse_selection_file_rejects_missing_file(tmp_path):
+    with pytest.raises(af.SelectionReadError):
+        af._parse_selection_file(tmp_path / "never_written.txt")
+
+
+def test_read_time_selection_ignores_the_failed_status(monkeypatch):
+    """Nyquist reports Failed! (no audio result) but the file write happened; the
+    reader must ignore the exception and read the file."""
+    import pyaudacity as pa
+
+    def fake_do(cmd, timeout):
+        # Simulate Nyquist: extract the path, write the bounds, then "fail".
+        start = cmd.index('open \\"') + len('open \\"')
+        end = cmd.index('\\"', start)
+        Path(cmd[start:end]).write_text("2.5\n9.0\n")
+        raise pa.PyAudacityException("BatchCommand finished: Failed!")
+
+    monkeypatch.setattr(af, "_pa_do_timed", fake_do)
+    assert af.read_time_selection() == (2.5, 9.0)
+
+
+# --- per-boundary selection scoping -----------------------------------------
+
+
+def test_scope_keeps_quantized_only_for_boundaries_inside_the_selection():
+    orig = [(1.0, 2.0, "a"), (5.0, 6.0, "b"), (2.5, 7.0, "c")]
+    quant = [(1.1, 2.1, "a"), (5.1, 6.1, "b"), (2.6, 7.1, "c")]
+    # selection [2.0, 6.5]:
+    #   a: start 1.0 out -> keep orig; end 2.0 in  -> keep quant
+    #   b: both in       -> both quant
+    #   c: start 2.5 in  -> quant;    end 7.0 out  -> keep orig
+    assert af._scope_to_selection(orig, quant, (2.0, 6.5)) == [
+        (1.0, 2.1, "a"),
+        (5.1, 6.1, "b"),
+        (2.6, 7.0, "c"),
+    ]
+
+
+def test_scope_point_label_inside_and_outside():
+    orig = [(3.0, 3.0, "p"), (8.0, 8.0, "q")]
+    quant = [(3.2, 3.2, "p"), (8.2, 8.2, "q")]
+    assert af._scope_to_selection(orig, quant, (2.0, 4.0)) == [
+        (3.2, 3.2, "p"),  # inside -> quantized
+        (8.0, 8.0, "q"),  # outside -> original
+    ]
+
+
+# --- selection scoping wired through the orchestrator -----------------------
+
+
+def _orchestrator_with_quantized(monkeypatch, tmp_path, current, quantized_out):
+    """Set up quantize_selected_label_track's world: 'chords' selected with
+    ``current`` content; the faked shell-out writes ``quantized_out`` to the temp."""
+    tracks = [
+        _track("song", kind="wave"),
+        _track("chords", selected=True),
+        _track("beats"),
+    ]
+    monkeypatch.setattr(af, "get_tracks", lambda: tracks)
+    monkeypatch.setattr(
+        af,
+        "get_label_tracks_content_via_getinfo",
+        lambda: {"chords": current, "beats": af._format_track_txt([(0.0, 0.0, "")])},
+    )
+    monkeypatch.setattr(af, "locate_quantize_script", lambda: tmp_path / "q.py")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **k: (Path(argv[-1]).write_text(quantized_out), _run_result())[1],
+    )
+    for fn in ("remove_selected_tracks",):
+        monkeypatch.setattr(af, fn, lambda: None)
+    monkeypatch.setattr(af, "make_label_track_from_file", lambda *a, **k: None)
+    monkeypatch.setattr(af, "get_track_count", lambda: 3)
+    monkeypatch.setattr(af, "move_track_to", lambda *a: None)
+    monkeypatch.setattr(af, "select_tracks", lambda *a: None)
+
+
+def test_only_boundaries_inside_the_selection_are_snapped(monkeypatch, tmp_path):
+    current = af._format_track_txt([(1.0, 2.0, "a"), (5.0, 6.0, "b")])
+    # quantize_labels would snap everything; the temp holds the fully-snapped form.
+    quantized = "1.1\t2.1\ta\n5.1\t6.1\tb\n"
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, quantized)
+    # Selection [4.0, 7.0]: only 'b' is inside -> only its boundaries move.
+    monkeypatch.setattr(af, "read_time_selection", lambda: (4.0, 7.0))
+
+    _, _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
+
+    assert changed is True
+    assert content == af._format_track_txt([(1.0, 2.0, "a"), (5.1, 6.1, "b")])
+
+
+def test_no_region_quantizes_the_whole_track(monkeypatch, tmp_path):
+    current = af._format_track_txt([(1.0, 2.0, "a"), (5.0, 6.0, "b")])
+    quantized = "1.1\t2.1\ta\n5.1\t6.1\tb\n"
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, quantized)
+    monkeypatch.setattr(af, "read_time_selection", lambda: (3.0, 3.0))  # cursor only
+
+    _, _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
+
+    assert content == af._format_track_txt([(1.1, 2.1, "a"), (5.1, 6.1, "b")])
+
+
+def test_force_whole_track_skips_the_selection_read(monkeypatch, tmp_path):
+    current = af._format_track_txt([(1.0, 2.0, "a")])
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, "1.1\t2.1\ta\n")
+
+    def boom():
+        raise AssertionError("read_time_selection must not be called with -f")
+
+    monkeypatch.setattr(af, "read_time_selection", boom)
+
+    _, _, _, content, _ = af.quantize_selected_label_track(
+        reference_name="beats", whole_track=True
+    )
+    assert content == af._format_track_txt([(1.1, 2.1, "a")])
+
+
+def test_selection_read_error_propagates(monkeypatch, tmp_path):
+    current = af._format_track_txt([(1.0, 2.0, "a")])
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, "1.1\t2.1\ta\n")
+
+    def boom():
+        raise af.SelectionReadError("no accessor")
+
+    monkeypatch.setattr(af, "read_time_selection", boom)
+    with pytest.raises(af.SelectionReadError):
+        af.quantize_selected_label_track(reference_name="beats")
+
+
 def test_quantized_content_is_canonical_six_decimal(monkeypatch, tmp_path):
     """quantize_labels emits bare floats; the versioned .txt must come back in
     the same 6-decimal form every other export uses, so files stay uniform."""
@@ -285,10 +451,11 @@ def test_quantized_content_is_canonical_six_decimal(monkeypatch, tmp_path):
     monkeypatch.setattr(
         af,
         "get_label_tracks_content_via_getinfo",
-        lambda: {"chords": "x", "beats": "y"},
+        lambda: {"chords": "9.0\t9.0\told\n", "beats": "y"},
     )
     script = tmp_path / "quantize_labels.py"
     monkeypatch.setattr(af, "locate_quantize_script", lambda: script)
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))  # whole track
 
     # Fake the shell-out: write bare-float quantized output to the target temp
     # (its path is the last positional of the argv).
@@ -307,58 +474,63 @@ def test_quantized_content_is_canonical_six_decimal(monkeypatch, tmp_path):
     assert content == "0.000000\t1.000000\tverse\n"
 
 
-# --- quantize_labels output is captured, surfaced only under -v / on failure -
+# --- the -v summary: scoped to what was applied, not quantize_labels' figures --
 
 
-def _stub_orchestrator_env(monkeypatch, tmp_path, run):
-    """Fake everything quantize_selected_label_track touches except ``run``."""
-    tracks = [
-        _track("song", kind="wave"),
-        _track("chords", selected=True),
-        _track("beats"),
-    ]
-    monkeypatch.setattr(af, "get_tracks", lambda: tracks)
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        lambda: {"chords": "0.0\t0.0\ta\n", "beats": "0.1\t0.1\t\n"},
-    )
-    monkeypatch.setattr(af, "locate_quantize_script", lambda: tmp_path / "q.py")
-    monkeypatch.setattr(subprocess, "run", run)
-    monkeypatch.setattr(af, "remove_selected_tracks", lambda: None)
-    monkeypatch.setattr(af, "make_label_track_from_file", lambda *a, **k: None)
-    monkeypatch.setattr(af, "get_track_count", lambda: 3)
-    monkeypatch.setattr(af, "move_track_to", lambda *a: None)
-    monkeypatch.setattr(af, "select_tracks", lambda *a: None)
+def test_applied_adjustment_counts_only_moved_boundaries():
+    orig = [(1.0, 2.0, "a"), (5.0, 6.0, "b")]
+    final = [(1.0, 2.5, "a"), (5.0, 6.0, "b")]  # only a.end moved, by 0.5
+    assert af._applied_adjustment(orig, final) == (1, 0.5)
 
 
-def test_quantize_labels_summary_is_hidden_without_verbose(
+def test_verbose_summary_names_the_selection_and_applied_change(
     monkeypatch, tmp_path, capsys
 ):
-    _stub_orchestrator_env(
-        monkeypatch,
-        tmp_path,
-        lambda *a, **k: _run_result(stderr="Total adjustment: 0\n"),
-    )
-    af.quantize_selected_label_track(reference_name="beats", verbose=False)
-    assert "Total adjustment" not in capsys.readouterr().err
+    current = af._format_track_txt([(1.0, 2.0, "a")])
+    # quantize_labels would snap to 1.5/2.5; selection [0.5, 3.0] covers both.
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, "1.5\t2.5\ta\n")
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.5, 3.0))
 
-
-def test_quantize_labels_summary_is_shown_under_verbose(monkeypatch, tmp_path, capsys):
-    _stub_orchestrator_env(
-        monkeypatch,
-        tmp_path,
-        lambda *a, **k: _run_result(stderr="Total adjustment: 0\n"),
-    )
     af.quantize_selected_label_track(reference_name="beats", verbose=True)
-    assert "Total adjustment" in capsys.readouterr().err
+
+    err = capsys.readouterr().err
+    assert "in selection [0.500, 3.000]" in err
+    assert "Quantized 2 boundaries" in err
+    # quantize_labels' own whole-track figure must not bleed through.
+    assert "Total adjustment" not in err
+
+
+def test_verbose_summary_omits_selection_for_whole_track(monkeypatch, tmp_path, capsys):
+    current = af._format_track_txt([(1.0, 2.0, "a")])
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, "1.5\t2.5\ta\n")
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))  # whole track
+
+    af.quantize_selected_label_track(reference_name="beats", verbose=True)
+
+    err = capsys.readouterr().err
+    assert "Quantized 2 boundaries" in err
+    assert "selection" not in err
+
+
+def test_no_verbose_summary_without_the_flag(monkeypatch, tmp_path, capsys):
+    current = af._format_track_txt([(1.0, 2.0, "a")])
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, "1.5\t2.5\ta\n")
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.5, 3.0))
+
+    af.quantize_selected_label_track(reference_name="beats", verbose=False)
+
+    assert "Quantized" not in capsys.readouterr().err
 
 
 def test_quantize_labels_failure_becomes_a_quantize_error(monkeypatch, tmp_path):
+    current = af._format_track_txt([(1.0, 2.0, "a")])
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, "unused")
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))
+
     def boom(*a, **k):
         raise subprocess.CalledProcessError(1, "q.py", stderr="line 3: not a label")
 
-    _stub_orchestrator_env(monkeypatch, tmp_path, boom)
+    monkeypatch.setattr(subprocess, "run", boom)
     with pytest.raises(af.QuantizeError, match="line 3: not a label"):
         af.quantize_selected_label_track(reference_name="beats")
 
@@ -421,8 +593,8 @@ def _stub_quantize(
     monkeypatch.setattr(rb, "prerequisites_met", lambda _v: True)
     monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: stem)
 
-    def fake_quantize(ref, verbose):
-        calls.append("quantized")
+    def fake_quantize(ref, verbose, whole_track=False):
+        calls.append(f"quantized:whole={whole_track}")
         return (name, 1, stem, content, changed)
 
     monkeypatch.setattr(af, "quantize_selected_label_track", fake_quantize)
@@ -442,7 +614,7 @@ def test_quantize_writes_the_versioned_txt_in_cwd_when_it_holds_the_project(
 
     written = tmp_path / "chords_song.txt"
     assert written.read_text() == "C\n"
-    assert calls == ["quantized"]
+    assert calls == ["quantized:whole=False"]
     assert str(written) in capsys.readouterr().out
 
 
@@ -465,7 +637,7 @@ def test_quantize_writes_to_the_discovered_project_dir_from_any_cwd(
 
     assert (proj / "chords_song.txt").read_text() == "C\n"
     assert not (cwd / "chords_song.txt").exists()
-    assert calls == ["quantized"]
+    assert calls == ["quantized:whole=False"]
 
 
 def test_quantize_refuses_before_mutating_when_project_dir_unknown(
@@ -527,6 +699,36 @@ def test_quantize_updates_a_stale_file_even_if_the_track_was_already_quantized(
     assert "was already quantized; updated its file" in capsys.readouterr().out
 
 
+def test_quantize_force_flag_requests_whole_track(monkeypatch, tmp_path):
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    calls = _stub_quantize(monkeypatch, name="chords", content="C\n")
+
+    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False, force=True)
+
+    assert calls == ["quantized:whole=True"]
+
+
+def test_selection_read_failure_exits_pointing_at_force(monkeypatch, tmp_path):
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    monkeypatch.setattr(rb, "prerequisites_met", lambda _v: True)
+    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: "song")
+
+    def boom(ref, verbose, whole_track=False):
+        raise af.SelectionReadError("Nyquist did not report the selection")
+
+    monkeypatch.setattr(af, "quantize_selected_label_track", boom)
+
+    with pytest.raises(SystemExit) as excinfo:
+        rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+    assert "-f" in str(excinfo.value)
+
+
 # --- CLI parsing and usage guards -------------------------------------------
 
 
@@ -563,6 +765,17 @@ def test_no_q_flag_leaves_quantize_off(monkeypatch):
     monkeypatch.setattr(_sys, "argv", ["rebuildap"])
     rebuildap.main()
     assert captured["kwargs"]["quantize"] is None
+
+
+def test_q_with_force_is_allowed_and_passes_both(monkeypatch):
+    """-q -f is valid (force = whole track); the guard must not reject it."""
+    import sys as _sys
+
+    captured = _captured_rebuild(monkeypatch)
+    monkeypatch.setattr(_sys, "argv", ["rebuildap", "-q", "-f"])
+    rebuildap.main()
+    assert captured["kwargs"]["quantize"] is rebuildap._QUANTIZE_AUTODETECT
+    assert captured["kwargs"]["force"] is True
 
 
 @pytest.mark.parametrize(

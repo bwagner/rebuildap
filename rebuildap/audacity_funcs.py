@@ -141,6 +141,16 @@ class QuantizeError(RuntimeError):
     """
 
 
+class SelectionReadError(RuntimeError):
+    """The current Audacity time selection could not be read via Nyquist.
+
+    Distinct from :class:`QuantizeError`: the fix is different (re-run with
+    ``-f`` to quantize the whole track), so the CLI catches it separately and
+    says so. Raised when the Nyquist selection accessor produces no parseable
+    result (e.g. it does not exist on this Audacity version).
+    """
+
+
 # when mod-script-pipe worked out fine:
 RESPONSE_OK = "\nBatchCommand finshed: OK\n"
 
@@ -177,6 +187,24 @@ BEATS_TRACK_PREFIX = "beat"
 # either name -- the extension is often dropped when symlinking a script in.
 QUANTIZE_SCRIPT_NAMES = ("quantize_labels.py", "quantize_labels")
 QUANTIZE_SCRIPT_URL = "https://github.com/bwagner/quantize_labels"
+
+# Reading the current time selection: mod-script-pipe can't, but a Nyquist script
+# runs inside Audacity with the selection as context. This *nil-returning* snippet
+# writes "start\nend\n" to {path}; it must return no value (ends at the close), or
+# Audacity pops a modal Message dialog that would wedge the pipe. It reports
+# Failed! on the pipe (no audio result) -- expected and ignored; the file is the
+# real output. Escaped quotes survive the protocol. See ~/.claude/audacity.md.
+_NY_SELECTION_TEMPLATE = (
+    '(let ((fp (open \\"{path}\\" :direction :output))) '
+    '(format fp \\"~a~%~a~%\\" '
+    "(get (quote *selection*) (quote start)) "
+    "(get (quote *selection*) (quote end))) (close fp))"
+)
+_SELECTION_READ_TIMEOUT = 15.0
+# Selection narrower than this (a bare cursor) counts as "no region" -> whole track.
+_NO_REGION_EPSILON = 1e-6
+# A boundary counts as "moved" for the -v summary if it shifted by more than this.
+_ADJUSTMENT_EPSILON = 1e-9
 
 GET_INFO_TRACKS = "Tracks"
 GET_INFO_JSON = "JSON"
@@ -1138,7 +1166,9 @@ def quantize_command(
 
 
 def quantize_selected_label_track(
-    reference_name: Optional[str] = None, verbose: bool = False
+    reference_name: Optional[str] = None,
+    verbose: bool = False,
+    whole_track: bool = False,
 ) -> Tuple[str, int, str, str, bool]:
     """Quantize the selected label track to a beats track, in place.
 
@@ -1149,10 +1179,16 @@ def quantize_selected_label_track(
     actually modified. Raises :class:`QuantizeError` on any precondition failure.
     See the module section header for the flow.
 
-    When the track is *already* on the grid, the quantized content equals the
-    track's current content, so the remove/import/move swap is skipped entirely
-    -- the project is left byte-identical (no ``.aup3`` mtime bump, no undo
-    churn) and ``changed`` is ``False``.
+    **Selection scope.** With ``whole_track`` false (the default), only label
+    boundaries lying inside the current Audacity time selection are snapped --
+    read via :func:`read_time_selection` (which may raise
+    :class:`SelectionReadError`, resolved *before* the project is touched). A
+    bare cursor / no region falls back to the whole track. ``whole_track`` (from
+    ``-f``) skips the selection read and quantizes everything.
+
+    When the result equals the track's current content (already on the grid, or
+    the selection caught no boundary), the remove/import/move swap is skipped
+    entirely -- the project is left byte-identical -- and ``changed`` is ``False``.
     """
     tracks = get_tracks()
     target_index, target_name, _reference_index, reference_name = (
@@ -1162,6 +1198,14 @@ def quantize_selected_label_track(
     contents = get_label_tracks_content_via_getinfo()
     script = locate_quantize_script()
 
+    # Resolve the selection scope before mutating anything, so a selection-read
+    # failure aborts cleanly (the caller turns it into "re-run with -f").
+    selection: Optional[Tuple[float, float]] = None
+    if not whole_track:
+        selection = read_time_selection()
+        if selection[1] - selection[0] <= _NO_REGION_EPSILON:
+            selection = None  # bare cursor / no region -> whole track
+
     ref_tmp = _write_temp_label_txt(contents[reference_name])
     target_tmp = _write_temp_label_txt(contents[target_name])
     try:
@@ -1170,11 +1214,10 @@ def quantize_selected_label_track(
                 f"Quantizing '{target_name}' to '{reference_name}' (via {script.name})."
             )
         # quantize_labels rewrites target_tmp in place to the reference grid. Its
-        # own summary ("Total adjustment ...", "Already quantized ...") is
-        # captured so it does not bleed into rebuildap's output; shown only under
-        # -v, and surfaced in full if the script fails.
+        # own summary is captured so it does not bleed into rebuildap's output
+        # (and would misreport a scoped run anyway); surfaced only if it fails.
         try:
-            result = subprocess.run(
+            subprocess.run(
                 quantize_command(script, ref_tmp, target_tmp),
                 check=True,
                 capture_output=True,
@@ -1184,16 +1227,25 @@ def quantize_selected_label_track(
             raise QuantizeError(
                 f"quantize_labels failed (exit {e.returncode}):\n{e.stderr}"
             ) from e
-        if verbose and result.stderr:
-            print(result.stderr, end="", file=sys.stderr)
-        # The quantized file is the new source of truth: canonicalize it for the
-        # versioned .txt the caller writes, and build the in-project track from
-        # the same bytes -- no read-back export, and the two cannot diverge.
-        quantized_content = _format_track_txt(_labels_from_txt(target_tmp.read_text()))
-        # Both sides are canonical (contents[...] comes from _format_track_txt
-        # too), so a plain compare tells whether quantizing changed anything.
+        # quantize_labels snapped every boundary; when a region is selected, keep
+        # only the in-window boundaries and revert the rest to their originals.
+        orig_labels = _labels_from_txt(contents[target_name])
+        quantized_labels = _labels_from_txt(target_tmp.read_text())
+        if selection is None:
+            final_labels = quantized_labels
+        else:
+            final_labels = _scope_to_selection(orig_labels, quantized_labels, selection)
+        if verbose:
+            # Our own summary, scoped to what was actually applied -- not
+            # quantize_labels' whole-track figures, which overstate a scoped run.
+            _report_applied_adjustment(orig_labels, final_labels, selection)
+        # This canonical form is both the versioned .txt and, re-written to the
+        # temp, the exact bytes imported -- so file and track cannot diverge.
+        quantized_content = _format_track_txt(final_labels)
+        # contents[...] is canonical too, so a plain compare tells if anything moved.
         changed = quantized_content != contents[target_name]
         if changed:
+            target_tmp.write_text(quantized_content)
             # Order matters: drop the old track first, then re-import, then move
             # the re-imported track (always appended at the bottom) to its old row.
             remove_selected_tracks()
@@ -1236,6 +1288,119 @@ def _labels_from_txt(content: str) -> List[Tuple[float, float, str]]:
         text = "\t".join(parts[2:])
         labels.append((start, end, text))
     return labels
+
+
+def _nyquist_write_selection_command(out_path: Path) -> str:
+    """The raw ``NyquistPrompt`` command that writes the selection to ``out_path``."""
+    ny = _NY_SELECTION_TEMPLATE.format(path=out_path)
+    return f'NyquistPrompt: Command="{ny}" Version="3"'
+
+
+def _parse_selection_file(path: Path) -> Tuple[float, float]:
+    """Parse ``start\\nend\\n`` into ``(start, end)`` (ordered). Raises
+    :class:`SelectionReadError` when absent or non-numeric (a real Nyquist
+    failure, e.g. the accessor returning ``NIL``)."""
+    text = path.read_text() if path.exists() else ""
+    fields = text.split()
+    if len(fields) != 2:
+        raise SelectionReadError(
+            f"Nyquist did not report the selection (got {text!r})."
+        )
+    try:
+        start, end = float(fields[0]), float(fields[1])
+    except ValueError as e:
+        raise SelectionReadError(
+            f"Nyquist selection output is not numeric (got {text!r})."
+        ) from e
+    return (start, end) if start <= end else (end, start)
+
+
+def read_time_selection() -> Tuple[float, float]:
+    """Return the current Audacity time selection ``(start, end)`` in seconds.
+
+    mod-script-pipe cannot query the selection, so this runs a nil-returning
+    Nyquist snippet that writes the bounds to a temp file (see
+    :data:`_NY_SELECTION_TEMPLATE`). The pipe reports ``Failed!`` -- expected,
+    the file write is the real output, so the exception is swallowed -- and the
+    file is parsed. Raises :class:`SelectionReadError` if nothing parseable was
+    written.
+    """
+    fd, name = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    out_path = Path(name)
+    try:
+        try:
+            _pa_do_timed(
+                _nyquist_write_selection_command(out_path), _SELECTION_READ_TIMEOUT
+            )
+        except pa.PyAudacityException:
+            pass  # nil-return => Failed!; the file write already happened
+        return _parse_selection_file(out_path)
+    finally:
+        out_path.unlink(missing_ok=True)
+
+
+def _scope_to_selection(
+    orig: List[Tuple[float, float, str]],
+    quantized: List[Tuple[float, float, str]],
+    selection: Tuple[float, float],
+) -> List[Tuple[float, float, str]]:
+    """Keep each *quantized* boundary only when its *original* position lay inside
+    ``selection``; revert the rest to the original.
+
+    Per boundary, not per label, so a label straddling a selection edge gets only
+    its in-window boundary snapped. ``orig`` and ``quantized`` are index-aligned
+    (quantize_labels preserves order and count). Text comes from ``orig``.
+    """
+    sel_start, sel_end = selection
+
+    def inside(t: float) -> bool:
+        return sel_start <= t <= sel_end
+
+    scoped: List[Tuple[float, float, str]] = []
+    for (o_start, o_end, o_text), (q_start, q_end, _q_text) in zip(orig, quantized):
+        scoped.append(
+            (
+                q_start if inside(o_start) else o_start,
+                q_end if inside(o_end) else o_end,
+                o_text,
+            )
+        )
+    return scoped
+
+
+def _applied_adjustment(
+    orig: List[Tuple[float, float, str]], final: List[Tuple[float, float, str]]
+) -> Tuple[int, float]:
+    """Return ``(#boundaries moved, total absolute adjustment in seconds)`` between
+    the original and the final (post-scoping) labels -- i.e. what was *applied*."""
+    moved = 0
+    total = 0.0
+    for (o_start, o_end, _), (f_start, f_end, _) in zip(orig, final):
+        for before, after in ((o_start, f_start), (o_end, f_end)):
+            delta = abs(after - before)
+            if delta > _ADJUSTMENT_EPSILON:
+                moved += 1
+                total += delta
+    return moved, total
+
+
+def _report_applied_adjustment(orig_labels, final_labels, selection) -> None:
+    """Print the applied-adjustment summary to stderr (under ``-v``), scoped to the
+    selection -- unlike quantize_labels' own whole-track figures."""
+    moved, total = _applied_adjustment(orig_labels, final_labels)
+    where = ""
+    if selection is not None:
+        where = f" in selection [{selection[0]:.3f}, {selection[1]:.3f}]"
+    if moved == 0:
+        print(f"Nothing to quantize{where}; already on the grid.", file=sys.stderr)
+        return
+    plural = "boundary" if moved == 1 else "boundaries"
+    print(
+        f"Quantized {moved} {plural}{where}: total adjustment {total:.6f}s, "
+        f"average {total / moved:.6f}s.",
+        file=sys.stderr,
+    )
 
 
 def import_audio(filename: Path):

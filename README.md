@@ -117,20 +117,20 @@ options:
                         beside the audio file. By default it is saved when no
                         .aup3 exists yet; an existing one is never
                         overwritten.
-  -f, --force           For the no-argument export only: export into the
+  -f, --force           Force. For the no-argument export: export into the
                         current directory even when the open project appears
-                        to live elsewhere (Open Recent). Without it, rebuildap
-                        points at where the project is and exports nothing.
-                        Does not override the never-overwrite rule for a
-                        rebuild.
+                        to live elsewhere (Open Recent). For -q: quantize the
+                        whole track instead of only the current time
+                        selection. Does not override the never-overwrite rule.
   -q, --quantize [BEATS_TRACK]
                         Quantize the selected label track in the open project
-                        to a beats label track already in it, in place: the
-                        boundaries snap to the beats grid, the track is re-
-                        imported at its original position, and its versioned
-                        .txt is updated to match. Give a track name to pick
-                        the reference, or omit it to auto-detect the beats
-                        track.
+                        to a beats label track already in it, in place: label
+                        boundaries inside the current time selection snap to
+                        the beats grid (the whole track when nothing is
+                        selected, or with -f), the track is re-imported at its
+                        original position, and its versioned .txt is updated
+                        to match. Give a track name to pick the reference, or
+                        omit it to auto-detect it.
   -V, --version         show program's version number and exit
 
 Input modes:
