@@ -35,6 +35,9 @@ rebuildap -c mysong.aup3
 ```
 
 That reports a diff per label track and updates any `.txt` whose content changed.
+It also flags any label track that exists only in Audacity, with no `.txt` file
+yet — select those tracks in Audacity and run `rebuildap` with no arguments in
+the project directory to export them.
 
 ## How it works
 
@@ -94,19 +97,20 @@ usage: rebuildap [-h] [-v] [-l] [-c] [-d] [-n] [-f] [-V] [filename]
 rebuild Audacity project
 
 positional arguments:
-  filename       The audio file name.
+  filename       Audio to rebuild from, or an .aup3 to export from. Omit to
+                 export the open Audacity project's labels (see Input modes
+                 below).
 
 options:
   -h, --help     show this help message and exit
   -v, --verbose  Enable verbose mode.
   -l, --label    Import label file.
-  -c, --check    Check whether audacity file newer than label files and show
-                 differences.
-  -d, --deep     With -c, skip the mtime gate and compare every label file
-                 against the project's label tracks, even ones newer than the
-                 .aup3. Opens Audacity every run but never reports a false
-                 'nothing to do' when a label file was rewritten (git
-                 checkout, touch) without the project changing.
+  -c, --check    Check whether Audacity file is newer than label files and
+                 show differences.
+  -d, --deep     With -c, compare every label file against the project's label
+                 tracks, even ones newer than the .aup3. Opens Audacity every
+                 run; catches label files rewritten (git checkout, touch)
+                 without changing the project.
   -n, --no-save  Don't save the rebuilt project as <audio-stem>.aup3 beside
                  the audio file. By default it is saved when no .aup3 exists
                  yet; an existing one is never overwritten.
@@ -116,6 +120,12 @@ options:
                  where the project is and exports nothing. Does not override
                  the never-overwrite rule for a rebuild.
   -V, --version  show program's version number and exit
+
+Input modes:
+  audio file   imported; matching *_<stem>.txt become label tracks
+  .aup3        its label tracks are exported to .txt files
+  (nothing)    the open Audacity project is used — selected label
+               tracks are exported, or all of them if none are selected
 ```
 
 ## Prerequisites

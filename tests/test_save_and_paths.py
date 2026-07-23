@@ -223,6 +223,48 @@ def test_check_prints_when_no_label_files(tmp_path, capsys):
     assert "No label files found" in capsys.readouterr().out
 
 
+def test_check_reports_label_track_present_only_in_audacity(
+    monkeypatch, tmp_path, capsys
+):
+    """A label track in Audacity with no .txt on disk must be reported.
+
+    The comparison loop is file-driven, so a track that exists only in the
+    project (never exported) was silently dropped. It should be named, and the
+    user pointed at how to export it — without ever auto-writing the file.
+    """
+    import rebuildap
+    from rebuildap import audacity_present as ap
+
+    project = tmp_path / "song.aup3"
+    project.write_bytes(b"aup3")
+    os.utime(project, (1, 1))  # old project; deep bypasses the mtime gate anyway
+    label = tmp_path / "parts_song.txt"
+    label.write_text("0.0\t1.0\tintro\n")  # matches the 'parts' track exactly
+
+    monkeypatch.setattr(af, "project_already_open", lambda _f: False)
+    monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
+    monkeypatch.setattr(ap, "close_owned_window", lambda *a, **k: None)
+    monkeypatch.setattr(af, "open_audio", lambda *a, **k: None)
+    monkeypatch.setattr(
+        af,
+        "get_label_tracks_content_via_getinfo",
+        lambda: {
+            "parts": "0.0\t1.0\tintro\n",  # backed by parts_song.txt
+            "chords": "0.0\t1.0\tEm\n",  # only in Audacity, no file
+        },
+    )
+
+    rebuildap.check_label_age(str(project), verbose=False, deep=True)
+
+    out = capsys.readouterr().out
+    assert "chords" in out, "the Audacity-only track must be named"
+    assert "no label file" in out
+    assert "rebuildap" in out, "the export suggestion must be shown"
+    assert not (tmp_path / "chords_song.txt").exists(), (
+        "an Audacity-only track must never be auto-written"
+    )
+
+
 def test_deep_check_opens_even_when_label_is_newer(monkeypatch, tmp_path):
     """--deep bypasses the mtime gate: a newer label file is still compared.
 

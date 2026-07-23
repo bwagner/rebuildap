@@ -32,8 +32,8 @@ def process_lines(lines):
 
 def check_label_age(filename: str, verbose, deep=False):
     """
-    Check whether the audacity file is newer than the label files.
-    Export those label tracks whose corresponding label files are older than the audacity file
+    Check whether the Audacity file is newer than the label files.
+    Export those label tracks whose corresponding label files are older than the Audacity file
     and compare their contents with their corresponding label files.
 
     With ``deep=True`` the mtime gate is skipped and every label file is
@@ -43,7 +43,7 @@ def check_label_age(filename: str, verbose, deep=False):
     project (``git checkout``, ``touch``, a restore), leaving it newer than the
     ``.aup3`` while its content has diverged.
 
-    Unfortunately, opening an audacity project and applying changes that are undone still
+    Unfortunately, opening an Audacity project and applying changes that are undone still
     updates the modification time of the project file. Filed an issue with Audacity:
     https://github.com/audacity/audacity/issues/9161 — **closed as not-planned**:
     every edit is written to the project file before you press Save, so undo and
@@ -53,9 +53,9 @@ def check_label_age(filename: str, verbose, deep=False):
     """
     if verbose:
         print(
-            f"Check whether audacity file newer than label files. ({filename or 'current dir'})"
+            f"Check whether Audacity file is newer than label files. ({filename or 'current dir'})"
         )
-        # check whether multiple audacity files in current directory
+        # check whether multiple Audacity files in current directory
     if filename:
         filename = Path(filename)
     else:
@@ -63,12 +63,12 @@ def check_label_age(filename: str, verbose, deep=False):
         try:
             first = next(audacity_files)
         except StopIteration:
-            print("No audacity files found in current directory.")
+            print("No Audacity files found in current directory.")
             return
         try:
             next(audacity_files)
             print(
-                "Multiple audacity files found in current directory. Please specify a filename."
+                "Multiple Audacity files found in current directory. Please specify a filename."
             )
             return
         except StopIteration:
@@ -77,7 +77,7 @@ def check_label_age(filename: str, verbose, deep=False):
         filename = first
 
     if verbose:
-        print(f"Checking whether {filename.name} newer than label files.")
+        print(f"Checking whether {filename.name} is newer than label files.")
     label_files = af.reorder_labels(af.create_labels_glob(filename))
     if not label_files:
         print(f"No label files found for {filename.name}. Nothing to do.")
@@ -99,7 +99,7 @@ def check_label_age(filename: str, verbose, deep=False):
             print(f"All label files are newer than {filename.name}. Nothing to do.")
             return
 
-    # TODO: export only the label tracks that are older than the audacity file
+    # TODO: export only the label tracks that are older than the Audacity file
     try:
         # Ahead of assert_audacity, so a project we are going to skip costs
         # nothing: it has tracks, so it fails the empty-project probe and
@@ -119,7 +119,7 @@ def check_label_age(filename: str, verbose, deep=False):
         print(f"Skipping {filename.name}: {e}", file=sys.stderr)
         return
 
-    _check_label_age_via_getinfo(filename, candidates)
+    _check_label_age_via_getinfo(filename, candidates, label_files)
 
     # Close via AppleScript Cmd-W rather than pa.do("Close:") — avoids the
     # mod-script-pipe → lib-menus.dylib crash path that bites after a few
@@ -131,15 +131,21 @@ def check_label_age(filename: str, verbose, deep=False):
     ap.close_owned_window(filename.stem, verbose)
 
 
-def _check_label_age_via_getinfo(filename, candidates):
-    """Non-interactive path: compare versioned files against GetInfo content in memory."""
+def _check_label_age_via_getinfo(filename, candidates, label_files):
+    """Non-interactive path: compare versioned files against GetInfo content in memory.
+
+    ``candidates`` is the mtime-gated subset actually compared; ``label_files``
+    is every versioned label file for the project, used only to tell a track
+    that is genuinely absent from disk apart from one merely gated out by mtime.
+    """
     contents = af.get_label_tracks_content_via_getinfo()
     # Beside the project being checked, not in the cwd: `rebuildap -c
     # /elsewhere/song.aup3` used to scatter export artifacts wherever it
     # happened to be run from.
     out_dir = Path(filename).expanduser().resolve().parent
+    stem = Path(filename.name).stem
     for label_file in candidates:
-        short_name = label_file.stem.replace(f"_{Path(filename.name).stem}", "")
+        short_name = label_file.stem.replace(f"_{stem}", "")
         expected = contents.get(short_name)
         if expected is None:
             print(f"No matching label track for {label_file.name}; skipping.")
@@ -155,6 +161,31 @@ def _check_label_age_via_getinfo(filename, candidates):
             short_name=short_name,
             out_dir=out_dir,
         )
+
+    _report_audacity_only_tracks(contents, label_files, stem, out_dir)
+
+
+def _report_audacity_only_tracks(contents, label_files, stem, out_dir):
+    """Report label tracks present in Audacity that have no ``.txt`` on disk.
+
+    The comparison loop above is file-driven, so a track that lives only in the
+    project — added in Audacity and never exported — is otherwise invisible to
+    ``-c``. Report each and point at the export route, but never auto-write it:
+    the versioned ``.txt`` files are the source of truth, and the no-arg export
+    is the deliberate path for creating them.
+    """
+    on_disk = {lf.stem.replace(f"_{stem}", "") for lf in label_files}
+    audacity_only = [name for name in contents if name not in on_disk]
+    if not audacity_only:
+        return
+    for name in audacity_only:
+        print(
+            f"Label track '{name}' is in the project but has no label file in {out_dir}."
+        )
+    print(
+        "To export it, select the label track(s) in Audacity, then run "
+        "`rebuildap` (no arguments) in that directory."
+    )
 
 
 def _maybe_write_divergent_export(
@@ -234,7 +265,7 @@ def rebuild(
         filename = Path(filename)
         if label:
             if verbose:
-                print("importing label into open audacity project.")
+                print("importing label into open Audacity project.")
             try:
                 af.make_label_track_from_file(filename)
             except af.LabelFormatError as e:
@@ -277,7 +308,7 @@ def rebuild(
             raise SystemExit(f"{e}") from e
         if af.is_audacity_project(filename):
             if verbose:
-                print(f"exporting labels from audacity project ({Path(filename).name})")
+                print(f"exporting labels from Audacity project ({Path(filename).name})")
             af.export_label_tracks_via_getinfo(filename)
             # TODO: export audio tracks, same naming scheme as labels (but ending in mp3)
             #       song track: "orig"
@@ -285,7 +316,7 @@ def rebuild(
         else:
             if verbose:
                 print(
-                    f"rebuilt audacity project from audio and labels ({Path(filename).name})"
+                    f"rebuilt Audacity project from audio and labels ({Path(filename).name})"
                 )
             if save:
                 saved = af.save_project_if_absent(filename, verbose)
@@ -390,8 +421,25 @@ def _report_exports(exported):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="rebuild Audacity project")
-    parser.add_argument("filename", nargs="?", help="The audio file name.")
+    parser = argparse.ArgumentParser(
+        description="rebuild Audacity project",
+        epilog=(
+            "Input modes:\n"
+            "  audio file   imported; matching *_<stem>.txt become label tracks\n"
+            "  .aup3        its label tracks are exported to .txt files\n"
+            "  (nothing)    the open Audacity project is used — selected label\n"
+            "               tracks are exported, or all of them if none are selected\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "filename",
+        nargs="?",
+        help=(
+            "Audio to rebuild from, or an .aup3 to export from. Omit to "
+            "export the open Audacity project's labels (see Input modes below)."
+        ),
+    )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose mode."
     )
@@ -400,18 +448,17 @@ def main():
         "-c",
         "--check",
         action="store_true",
-        help="Check whether audacity file newer than label files and show differences.",
+        help="Check whether Audacity file is newer than label files and show differences.",
     )
     parser.add_argument(
         "-d",
         "--deep",
         action="store_true",
         help=(
-            "With -c, skip the mtime gate and compare every label file against "
+            "With -c, compare every label file against "
             "the project's label tracks, even ones newer than the .aup3. Opens "
-            "Audacity every run but never reports a false 'nothing to do' when a "
-            "label file was rewritten (git checkout, touch) without the project "
-            "changing."
+            "Audacity every run; catches label files rewritten (git checkout, "
+            "touch) without changing the project."
         ),
     )
     parser.add_argument(
