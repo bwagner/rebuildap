@@ -223,6 +223,150 @@ def test_check_prints_when_no_label_files(tmp_path, capsys):
     assert "No label files found" in capsys.readouterr().out
 
 
+def _check_with_stubbed_audacity(monkeypatch, project, contents, **kwargs):
+    """Run check_label_age with the live layer faked out."""
+    import rebuildap
+    from rebuildap import audacity_present as ap
+
+    monkeypatch.setattr(af, "project_already_open", lambda _f: False)
+    monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
+    monkeypatch.setattr(ap, "close_owned_window", lambda *a, **k: None)
+    monkeypatch.setattr(af, "open_audio", lambda *a, **k: None)
+    monkeypatch.setattr(af, "get_label_tracks_content_via_getinfo", lambda: contents)
+    rebuildap.check_label_age(str(project), verbose=False, **kwargs)
+
+
+def test_a_newer_label_file_is_still_compared_once_audacity_is_open(
+    monkeypatch, tmp_path, capsys
+):
+    """No per-file gate: once the project is open, every label file is compared.
+
+    The gate is a whole-*project* decision (is it worth opening Audacity at all),
+    not a per-file filter. Filtering per file saved ~0.2ms each -- the GetInfo
+    fetches every track in one call anyway -- while silently hiding tracks: a run
+    showing parts/bars/beats gave no clue 'chords' had been skipped for being
+    newer, which is exactly what -q and -t make it by rewriting the .txt.
+    """
+    project = tmp_path / "song.aup3"
+    project.write_bytes(b"aup3")
+    old = tmp_path / "parts_song.txt"
+    old.write_text("0.0\t1.0\tintro\n")
+    os.utime(old, (1, 1))  # older than the project -> Audacity is worth opening
+    newer = tmp_path / "chords_song.txt"
+    newer.write_text("0.0\t1.0\tEm\n")  # newer than the project
+
+    _check_with_stubbed_audacity(
+        monkeypatch, project, {"parts": "0.0\t1.0\tintro\n", "chords": "0.0\t1.0\tEm\n"}
+    )
+
+    out = capsys.readouterr().out
+    assert "chords" in out, "a newer label file must still be compared"
+    assert "parts" in out
+    assert "Not compared" not in out, "nothing is skipped, so nothing to report"
+
+
+def test_a_newer_label_file_that_diverges_is_reported(monkeypatch, tmp_path, capsys):
+    """The point of comparing it: a real divergence in a newer file is surfaced,
+    where the per-file gate stayed silent about it."""
+    project = tmp_path / "song.aup3"
+    project.write_bytes(b"aup3")
+    old = tmp_path / "parts_song.txt"
+    old.write_text("0.0\t1.0\tintro\n")
+    os.utime(old, (1, 1))
+    newer = tmp_path / "chords_song.txt"
+    newer.write_text("0.0\t1.0\tEm\n")  # newer, and differs from the project
+
+    _check_with_stubbed_audacity(
+        monkeypatch,
+        project,
+        {"parts": "0.0\t1.0\tintro\n", "chords": "0.0\t1.0\tAm\n"},
+    )
+
+    out = capsys.readouterr().out
+    assert "chords" in out
+    assert "identical" not in out.split("chords")[-1], "the diff must be reported"
+
+
+def test_the_versioned_label_file_is_never_overwritten_by_check(
+    monkeypatch, tmp_path, capsys
+):
+    """Comparing newer files must not clobber a .txt that -q or -t just wrote.
+
+    A divergence writes the *export artifact* <short_name>.txt, never the
+    versioned <short_name>_<stem>.txt.
+    """
+    project = tmp_path / "song.aup3"
+    project.write_bytes(b"aup3")
+    old = tmp_path / "parts_song.txt"
+    old.write_text("0.0\t1.0\tintro\n")
+    os.utime(old, (1, 1))
+    versioned = tmp_path / "chords_song.txt"
+    versioned.write_text("0.0\t1.0\tEm\n")
+
+    _check_with_stubbed_audacity(
+        monkeypatch,
+        project,
+        {"parts": "0.0\t1.0\tintro\n", "chords": "0.0\t1.0\tAm\n"},
+    )
+
+    assert versioned.read_text() == "0.0\t1.0\tEm\n", "source of truth untouched"
+    assert (tmp_path / "chords.txt").read_text() == "0.0\t1.0\tAm\n"
+
+
+def test_every_label_file_newer_skips_opening_audacity(monkeypatch, tmp_path, capsys):
+    """The gate's whole job: when no label file predates the .aup3, nothing an
+    open could reveal, so Audacity is never started. This is the 2-3s (plus a GUI
+    window, plus a crash-prone interaction) the gate exists to save - and the only
+    saving it ever made, which is why the per-file filter was dropped."""
+    import rebuildap
+    from rebuildap import audacity_present as ap
+
+    project = tmp_path / "song.aup3"
+    project.write_bytes(b"aup3")
+    os.utime(project, (1, 1))
+    (tmp_path / "parts_song.txt").write_text("0.0\t1.0\tintro\n")
+
+    monkeypatch.setattr(
+        ap, "assert_audacity", lambda *a, **k: pytest.fail("must not start Audacity")
+    )
+    monkeypatch.setattr(
+        af, "open_audio", lambda *a, **k: pytest.fail("must not open the project")
+    )
+
+    rebuildap.check_label_age(str(project), verbose=False)
+
+    assert "Nothing to do" in capsys.readouterr().out
+
+
+def test_one_older_label_file_is_enough_to_open_audacity(monkeypatch, tmp_path):
+    """The gate is a whole-project decision: a single older file means the open is
+    worth it, and then everything is compared."""
+    import rebuildap
+    from rebuildap import audacity_present as ap
+
+    project = tmp_path / "song.aup3"
+    project.write_bytes(b"aup3")
+    old = tmp_path / "parts_song.txt"
+    old.write_text("0.0\t1.0\tintro\n")
+    os.utime(old, (1, 1))
+    (tmp_path / "chords_song.txt").write_text("0.0\t1.0\tEm\n")  # newer
+
+    opened = []
+    monkeypatch.setattr(af, "project_already_open", lambda _f: False)
+    monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
+    monkeypatch.setattr(ap, "close_owned_window", lambda *a, **k: None)
+    monkeypatch.setattr(af, "open_audio", lambda *a, **k: opened.append(True))
+    monkeypatch.setattr(
+        af,
+        "get_label_tracks_content_via_getinfo",
+        lambda: {"parts": "0.0\t1.0\tintro\n", "chords": "0.0\t1.0\tEm\n"},
+    )
+
+    rebuildap.check_label_age(str(project), verbose=False)
+
+    assert opened == [True]
+
+
 def test_check_reports_label_track_present_only_in_audacity(
     monkeypatch, tmp_path, capsys
 ):
@@ -266,7 +410,7 @@ def test_check_reports_label_track_present_only_in_audacity(
 
 
 def test_deep_check_opens_even_when_label_is_newer(monkeypatch, tmp_path):
-    """--deep bypasses the mtime gate: a newer label file is still compared.
+    """-c -f bypasses the mtime gate: a newer label file is still compared.
 
     The non-deep path returns before touching Audacity here; deep must instead
     reach open_audio and the getinfo comparison.
@@ -599,17 +743,94 @@ def test_no_arg_force_exports_to_cwd_despite_candidates(tmp_path, monkeypatch, c
     assert str(candidate) in captured.err  # the notice names where it lives
 
 
-def test_force_flag_requires_the_no_arg_export(monkeypatch):
-    """--force is meaningful only for the no-argument export; combining it with a
-    filename (or -c/-l) is a usage error, like --deep without --check."""
+def _run_main(monkeypatch, argv):
     import sys as _sys
 
     import rebuildap
 
-    monkeypatch.setattr(_sys, "argv", ["rebuildap", "song.opus", "--force"])
+    captured = {}
+    monkeypatch.setattr(
+        rebuildap, "rebuild", lambda *a, **k: captured.update(args=a, kwargs=k)
+    )
+    monkeypatch.setattr(_sys, "argv", argv)
+    rebuildap.main()
+    return captured
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["rebuildap", "song.opus", "--force"],  # a rebuild has nothing to force
+        ["rebuildap", "-l", "--force"],  # nor does a label import
+    ],
+)
+def test_force_is_rejected_where_it_means_nothing(monkeypatch, argv):
+    import sys as _sys
+
+    import rebuildap
+
+    monkeypatch.setattr(_sys, "argv", argv)
     with pytest.raises(SystemExit) as excinfo:
         rebuildap.main()
     assert excinfo.value.code != 0
+
+
+def test_force_with_check_requests_the_deep_comparison(monkeypatch):
+    """-c -f replaced -c -d: it skips the mtime gate and compares every file.
+
+    Previously `-c -f` was a usage error, so this combination flipping from
+    rejected to meaningful is the whole point of the rename.
+    """
+    captured = _run_main(monkeypatch, ["rebuildap", "-c", "-f"])
+    assert captured["kwargs"]["deep"] is True
+    assert captured["args"][3] is True, "check is passed positionally"
+
+
+def test_force_with_check_and_a_filename_is_allowed(monkeypatch):
+    """-c takes a filename, so a filename must not disqualify -f the way it does
+    for a rebuild."""
+    captured = _run_main(monkeypatch, ["rebuildap", "-c", "song.aup3", "-f"])
+    assert captured["kwargs"]["deep"] is True
+    assert captured["args"][0] == "song.aup3"
+
+
+def test_check_without_force_is_not_deep(monkeypatch):
+    captured = _run_main(monkeypatch, ["rebuildap", "-c"])
+    assert captured["kwargs"]["deep"] is False
+
+
+def test_every_mode_that_accepts_force_documents_its_own_meaning(monkeypatch, capsys):
+    """-f's help is an index, not an enumeration, so each mode must say what -f
+    does *there*.
+
+    The enumeration went stale the moment -t was added -- it kept listing only
+    the export and -q senses. With the index form the risk inverts: a new mode
+    could accept -f and document it nowhere. This pins the convention for the
+    three that exist. See decisions.md 2026-07-25.
+    """
+    import sys as _sys
+
+    import rebuildap
+
+    monkeypatch.setattr(_sys, "argv", ["rebuildap", "--help"])
+    with pytest.raises(SystemExit):
+        rebuildap.main()
+    help_text = capsys.readouterr().out
+
+    force_entry = help_text.split("-f, --force")[1].split("-q, --quantize")[0]
+    assert "depends on the mode" in force_entry, "-f must point, not enumerate"
+
+    check_entry = help_text.split("-c, --check")[1].split("-n, --no-save")[0]
+    quantize_entry = help_text.split("-q, --quantize")[1].split("-t, --transpose")[0]
+    transpose_entry = help_text.split("-t, --transpose")[1].split("-s, --sharps")[0]
+    epilog = help_text.split("Input modes:")[1]
+    for name, entry in [
+        ("-c", check_entry),
+        ("-q", quantize_entry),
+        ("-t", transpose_entry),
+        ("the no-argument export (epilog)", epilog),
+    ]:
+        assert "-f" in entry, f"{name} accepts -f but does not document it"
 
 
 def test_no_arg_exports_to_cwd_with_notice_when_no_candidates(

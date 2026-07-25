@@ -92,56 +92,56 @@ batch runs never stop for a dialog. There's a small precision trade-off:
 ## Usage
 
 ```console
-usage: rebuildap [-h] [-v] [-l] [-c] [-d] [-n] [-f] [-q [BEATS_TRACK]]
+usage: rebuildap [-h] [-v] [-l] [-c] [-n] [-f] [-q [BEATS_TRACK]]
                  [-t SEMITONES] [-s] [-V]
                  [filename]
 
 rebuild Audacity project
 
 positional arguments:
-  filename              Audio to rebuild from, or an .aup3 to export from.
-                        Omit to export the open Audacity project's labels (see
-                        Input modes below).
+  filename              Audio to rebuild a project from, or an .aup3 to export
+                        labels from. Omit to export the open Audacity
+                        project's labels (see Input modes below).
 
 options:
   -h, --help            show this help message and exit
   -v, --verbose         Enable verbose mode.
   -l, --label           Import label file.
   -c, --check           Check whether Audacity file is newer than label files
-                        and show differences.
-  -d, --deep            With -c, compare every label file against the
-                        project's label tracks, even ones newer than the
-                        .aup3. Opens Audacity every run; catches label files
-                        rewritten (git checkout, touch) without changing the
-                        project.
+                        and show differences. Audacity is opened only when
+                        some label file is older than the .aup3; every label
+                        file is then compared. With -f, open even when all of
+                        them are newer - opens Audacity every run, and catches
+                        label files rewritten (by e.g. git checkout, touch)
+                        without changing the project.
   -n, --no-save         Don't save the rebuilt project as <audio-stem>.aup3
                         beside the audio file. By default it is saved when no
                         .aup3 exists yet; an existing one is never
                         overwritten.
-  -f, --force           Force. For the no-argument export: export into the
-                        current directory even when the open project appears
-                        to live elsewhere (Open Recent). For -q: quantize the
-                        whole track instead of only the current time
-                        selection. Does not override the never-overwrite rule.
+  -f, --force           Force. What it overrides depends on the mode - see -c,
+                        -q, -t and "Input modes" below. Never overrides the
+                        never-overwrite rule for an existing .aup3.
   -q, --quantize [BEATS_TRACK]
                         Quantize the selected label track in the open project
-                        to a beats label track already in it, in place: label
-                        boundaries inside the current time selection snap to
-                        the beats grid (the whole track when nothing is
-                        selected, or with -f), the track is re-imported at its
-                        original position, and its versioned .txt is updated
-                        to match. Give a track name to pick the reference, or
-                        omit it to auto-detect it.
+                        to a beats label track already in it, in place: its
+                        label boundaries snap to the beats grid, the track is
+                        re-imported at its original position, and its
+                        versioned .txt is updated to match. Give a track name
+                        to pick the reference, or omit it to auto-detect it:
+                        the sole label track whose name starts with 'beat'
+                        (case-insensitive). When a time selection is active,
+                        only the boundaries inside it are snapped; -f always
+                        quantizes the whole track.
   -t, --transpose SEMITONES
                         Transpose the chords in the selected label track of
                         the open project by SEMITONES half steps (negative
-                        transposes down), in place: labels starting inside the
-                        current time selection are transposed (the whole track
-                        when nothing is selected, or with -f), and the
-                        versioned .txt is updated to match. Label text that is
-                        not a chord (section markers, lyric cues, fingerings)
-                        is left alone and reported. Chords are spelled with
-                        flats unless -s is given.
+                        transposes down), in place, and update its versioned
+                        .txt to match. Label text that is not a chord (section
+                        markers, lyric cues, fingerings) is left alone and
+                        reported. Chords are spelled with flats unless -s is
+                        given. When a time selection is active, only the
+                        labels starting inside it are transposed; -f always
+                        transposes the whole track.
   -s, --sharps          With -t, spell transposed chords with sharps (A#)
                         instead of the default flats (Bb).
   -V, --version         show program's version number and exit
@@ -149,8 +149,10 @@ options:
 Input modes:
   audio file   imported; matching *_<stem>.txt become label tracks
   .aup3        its label tracks are exported to .txt files
-  (nothing)    the open Audacity project is used — selected label
-               tracks are exported, or all of them if none are selected
+  (nothing)    the open Audacity project is used - selected label
+               tracks are exported, or all of them if none are
+               selected; with -f, into the current directory even
+               when the project appears to live elsewhere
 
 Transform modes (-q, -t) take no filename: they rewrite the selected
 label track of the open project in place and update its versioned

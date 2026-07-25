@@ -215,7 +215,7 @@ def dismissing_upgrade_dialog(verbose: bool = False):
         if verbose and dismissed.is_set():
             print(
                 "Acknowledged Audacity's 'project needs updating' dialog. The "
-                "project file is not modified by opening it — the format "
+                "project file is not modified by opening it - the format "
                 "conversion would only happen on save."
             )
 

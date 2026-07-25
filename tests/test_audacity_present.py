@@ -179,6 +179,10 @@ def test_fifo_check_gives_startup_a_grace_period(monkeypatch, tmp_path):
     monkeypatch.setattr(ap, "_SCRIPT_PIPE_TO", str(tmp_path / "to"))
     monkeypatch.setattr(ap, "_SCRIPT_PIPE_FROM", str(tmp_path / "from"))
     monkeypatch.setattr(ap, "SCRIPT_PIPE_GRACE", 30.0)
+    # The TimeoutError message lists the open window titles, which is a real
+    # osascript call - this test used to make one against the developer's own
+    # machine on every offline run (caught by tests/conftest.py, 2026-07-25).
+    monkeypatch.setattr(ap, "audacity_window_names", lambda: [])
 
     # Grace not yet elapsed, so this is a plain timeout, not "module disabled".
     with pytest.raises(TimeoutError):

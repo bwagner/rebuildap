@@ -15,6 +15,49 @@ its own. The rebuild is proof that the project and the label files agree — it 
 built from those very files — so recording that agreement in the mtimes is
 accurate rather than a fudge.
 
+## What the mtime gate decides — and what it doesn't
+
+The same mtimes drive `-c`, in the other direction. An Audacity edit always bumps
+the `.aup3` to newest (see
+[When an .aup3 changes on disk](audacity-quirks.md#when-an-aup3-changes-on-disk)),
+so if *every* label file is newer than the project, no edit can have outrun them
+and there is nothing an open could reveal:
+
+```console
+All label files are newer than song.aup3. Nothing to do.
+```
+
+That is the gate's whole job, and it is worth having: it skips a 2-3 second
+project open, a GUI window, and one more interaction with a crash-prone
+dependency — per project, across a sweep of many.
+
+**The gate is a whole-project decision, not a per-file filter.** Once the project
+is open, *every* label file is compared, newer ones included. It used to compare
+only the older ones, which was close to free to change and quietly wrong:
+
+- `GetInfo` fetches every label track in a single call, so a track is already in
+  memory whether or not its file passes any filter.
+- Comparing one more file costs about **0.2 ms** (measured over 654 real label
+  files), against 2-3 s for the open it cannot avoid. The per-file filter saved
+  nothing measurable.
+- It hid tracks. `-q` and `-t` rewrite a label file *after* reading the project,
+  so the file they just wrote is newer than the `.aup3` — and a `-c` run would
+  list three tracks while silently omitting the fourth, indistinguishable from a
+  project that only has three.
+
+`-c -f` skips the gate: open and compare even when every label file is newer.
+That is for when mtimes lie across the board — a `git checkout`, a `touch`, a
+restore — leaving files newer than the project while their content has diverged.
+
+Comparing a newer file cannot damage it. A divergence writes the *export
+artifact* `<track>.txt`, never the versioned `<track>_<stem>.txt`, so a `.txt`
+that `-q` or `-t` just wrote is never overwritten by a check.
+
+(`-c -f` was spelled `-c -d` until 2026-07-25. It became `-f` to join the other
+modes' "ignore the narrowing rule, do the whole thing" flag — the same `-f` that
+exports into the current directory anyway, or acts on the whole track rather than
+the time selection.)
+
 ## Two ways to export label tracks
 
 Audacity doesn't support exporting label tracks selectively: when exporting via

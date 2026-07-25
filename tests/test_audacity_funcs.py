@@ -90,6 +90,11 @@ def _fake_already_open(monkeypatch, is_open):
     # error rather than an empty answer.
     monkeypatch.setattr(ap, "is_audacity_running", lambda: True)
     monkeypatch.setattr(ap, "project_window_open", lambda _stem: is_open)
+    # open_project runs the upgrade-dialog watcher in a background thread; unfaked
+    # it polls System Events for real. Its exception could only ever surface as a
+    # warning (it is in a thread), so this went unnoticed until tests/conftest.py
+    # blocked the live layer on 2026-07-25.
+    monkeypatch.setattr(ap, "upgrade_dialog_present", lambda: False)
 
 
 def test_open_project_sends_nothing_when_the_project_is_already_open(monkeypatch):

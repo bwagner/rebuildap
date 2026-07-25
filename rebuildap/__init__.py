@@ -40,12 +40,13 @@ def check_label_age(filename: str, verbose, deep=False):
     Export those label tracks whose corresponding label files are older than the Audacity file
     and compare their contents with their corresponding label files.
 
-    With ``deep=True`` the mtime gate is skipped and every label file is
-    compared against the project's label tracks, regardless of mtimes. This
-    costs an Audacity open on every run but never gives a false "nothing to
-    do": mtimes lie when something rewrites a label file without touching the
-    project (``git checkout``, ``touch``, a restore), leaving it newer than the
-    ``.aup3`` while its content has diverged.
+    Audacity is opened only when *some* label file is older than the ``.aup3``;
+    once open, every label file is compared. With ``deep=True`` (the CLI's
+    ``-c -f``) it is opened even when they are all newer. That costs an Audacity
+    open on every run but never gives a false "nothing to do": mtimes lie when
+    something rewrites a label file without touching the project (e.g. ``git
+    checkout``, ``touch``, a restore), leaving it newer than the ``.aup3`` while
+    its content has diverged.
 
     Unfortunately, opening an Audacity project and applying changes that are undone still
     updates the modification time of the project file. Filed an issue with Audacity:
@@ -87,21 +88,11 @@ def check_label_age(filename: str, verbose, deep=False):
         print(f"No label files found for {filename.name}. Nothing to do.")
         return
 
-    if deep:
-        # Skip the mtime gate: compare every label file, regardless of age.
-        candidates = list(label_files)
-    else:
-        audacity_file_mtime = filename.stat().st_mtime
-        candidates = [
-            Path(label_file)
-            for label_file in label_files
-            if label_file.stat().st_mtime < audacity_file_mtime
-        ]
-        if not candidates:
-            # Printed unconditionally, not only under -v: a check run that
-            # concludes there is nothing to do must say so, or it looks broken.
-            print(f"All label files are newer than {filename.name}. Nothing to do.")
-            return
+    if not deep and not _any_label_file_older(label_files, filename):
+        # Printed unconditionally, not only under -v: a check run that
+        # concludes there is nothing to do must say so, or it looks broken.
+        print(f"All label files are newer than {filename.name}. Nothing to do.")
+        return
 
     # TODO: export only the label tracks that are older than the Audacity file
     try:
@@ -123,7 +114,7 @@ def check_label_age(filename: str, verbose, deep=False):
         print(f"Skipping {filename.name}: {e}", file=sys.stderr)
         return
 
-    _check_label_age_via_getinfo(filename, candidates, label_files)
+    _check_label_age_via_getinfo(filename, label_files)
 
     # Close via AppleScript Cmd-W rather than pa.do("Close:") — avoids the
     # mod-script-pipe → lib-menus.dylib crash path that bites after a few
@@ -135,12 +126,33 @@ def check_label_age(filename: str, verbose, deep=False):
     ap.close_owned_window(filename.stem, verbose)
 
 
-def _check_label_age_via_getinfo(filename, candidates, label_files):
+def _short_label_name(label_file, stem):
+    """The label *track* name a versioned file belongs to: ``chords_song.txt`` ->
+    ``chords``."""
+    return Path(label_file).stem.replace(f"_{stem}", "")
+
+
+def _any_label_file_older(label_files, filename):
+    """Whether any label file predates the ``.aup3``.
+
+    The mtime gate is a whole-*project* decision -- "is opening Audacity worth
+    it?" -- not a per-file filter. If every label file is newer, no project edit
+    can have outrun them, so there is nothing an open could reveal. If even one is
+    older, the project is opened and then *every* label file is compared: the
+    ``GetInfo`` fetches all tracks in one call and comparing one more costs about
+    0.2 ms, so filtering per file saved nothing measurable while silently hiding
+    tracks -- a run would list three and give no hint a fourth existed, which is
+    exactly what ``-q`` and ``-t`` cause by rewriting a ``.txt``.
+    """
+    aup3_mtime = filename.stat().st_mtime
+    return any(f.stat().st_mtime < aup3_mtime for f in label_files)
+
+
+def _check_label_age_via_getinfo(filename, label_files):
     """Non-interactive path: compare versioned files against GetInfo content in memory.
 
-    ``candidates`` is the mtime-gated subset actually compared; ``label_files``
-    is every versioned label file for the project, used only to tell a track
-    that is genuinely absent from disk apart from one merely gated out by mtime.
+    Every label file for the project is compared -- see :func:`_any_label_file_older`
+    for why there is no per-file gate.
     """
     contents = af.get_label_tracks_content_via_getinfo()
     # Beside the project being checked, not in the cwd: `rebuildap -c
@@ -148,8 +160,8 @@ def _check_label_age_via_getinfo(filename, candidates, label_files):
     # happened to be run from.
     out_dir = Path(filename).expanduser().resolve().parent
     stem = Path(filename.name).stem
-    for label_file in candidates:
-        short_name = label_file.stem.replace(f"_{stem}", "")
+    for label_file in label_files:
+        short_name = _short_label_name(label_file, stem)
         expected = contents.get(short_name)
         if expected is None:
             print(f"No matching label track for {label_file.name}; skipping.")
@@ -178,7 +190,7 @@ def _report_audacity_only_tracks(contents, label_files, stem, out_dir):
     the versioned ``.txt`` files are the source of truth, and the no-arg export
     is the deliberate path for creating them.
     """
-    on_disk = {lf.stem.replace(f"_{stem}", "") for lf in label_files}
+    on_disk = {_short_label_name(lf, stem) for lf in label_files}
     audacity_only = [name for name in contents if name not in on_disk]
     if not audacity_only:
         return
@@ -296,7 +308,7 @@ def rebuild(
             if existing.exists():
                 raise SystemExit(
                     f"{existing.name} already exists beside {filename.name} and is "
-                    "never overwritten — it is your working copy and may hold edits "
+                    "never overwritten - it is your working copy and may hold edits "
                     "the label files don't have. Nothing was rebuilt. Use -n to "
                     "rebuild into an unsaved window anyway, or move the existing "
                     f"{existing.name} aside first."
@@ -647,8 +659,10 @@ def main():
             "Input modes:\n"
             "  audio file   imported; matching *_<stem>.txt become label tracks\n"
             "  .aup3        its label tracks are exported to .txt files\n"
-            "  (nothing)    the open Audacity project is used — selected label\n"
-            "               tracks are exported, or all of them if none are selected\n"
+            "  (nothing)    the open Audacity project is used - selected label\n"
+            "               tracks are exported, or all of them if none are\n"
+            "               selected; with -f, into the current directory even\n"
+            "               when the project appears to live elsewhere\n"
             "\n"
             "Transform modes (-q, -t) take no filename: they rewrite the selected\n"
             "label track of the open project in place and update its versioned\n"
@@ -660,8 +674,9 @@ def main():
         "filename",
         nargs="?",
         help=(
-            "Audio to rebuild from, or an .aup3 to export from. Omit to "
-            "export the open Audacity project's labels (see Input modes below)."
+            "Audio to rebuild a project from, or an .aup3 to export labels "
+            "from. Omit to export the open Audacity project's labels (see "
+            "Input modes below)."
         ),
     )
     parser.add_argument(
@@ -672,17 +687,13 @@ def main():
         "-c",
         "--check",
         action="store_true",
-        help="Check whether Audacity file is newer than label files and show differences.",
-    )
-    parser.add_argument(
-        "-d",
-        "--deep",
-        action="store_true",
         help=(
-            "With -c, compare every label file against "
-            "the project's label tracks, even ones newer than the .aup3. Opens "
-            "Audacity every run; catches label files rewritten (git checkout, "
-            "touch) without changing the project."
+            "Check whether Audacity file is newer than label files and show "
+            "differences. Audacity is opened only when some label file is older "
+            "than the .aup3; every label file is then compared. With -f, open "
+            "even when all of them are newer - opens Audacity every run, and "
+            "catches label files rewritten (by e.g. git checkout, touch) without "
+            "changing the project."
         ),
     )
     parser.add_argument(
@@ -699,11 +710,14 @@ def main():
         "-f",
         "--force",
         action="store_true",
+        # Deliberately an index rather than an enumeration: each mode documents
+        # what -f does *there* (-q and -t in their own help, the no-argument
+        # export in the epilog), so no sentence appears twice and a new mode
+        # cannot leave this entry stale -- as -t did.
         help=(
-            "Force. For the no-argument export: export into the current "
-            "directory even when the open project appears to live elsewhere "
-            "(Open Recent). For -q: quantize the whole track instead of only the "
-            "current time selection. Does not override the never-overwrite rule."
+            "Force. What it overrides depends on the mode - see -c, -q, -t and "
+            '"Input modes" below. Never overrides the never-overwrite rule for '
+            "an existing .aup3."
         ),
     )
     parser.add_argument(
@@ -715,11 +729,14 @@ def main():
         metavar="BEATS_TRACK",
         help=(
             "Quantize the selected label track in the open project to a beats "
-            "label track already in it, in place: label boundaries inside the "
-            "current time selection snap to the beats grid (the whole track when "
-            "nothing is selected, or with -f), the track is re-imported at its "
-            "original position, and its versioned .txt is updated to match. Give "
-            "a track name to pick the reference, or omit it to auto-detect it."
+            "label track already in it, in place: its label boundaries snap to "
+            "the beats grid, the track is re-imported at its original position, "
+            "and its versioned .txt is updated to match. Give a track name to "
+            "pick the reference, or omit it to auto-detect it: the sole label "
+            f"track whose name starts with '{af.BEATS_TRACK_PREFIX}' "
+            "(case-insensitive). When a time "
+            "selection is active, only the boundaries inside it are snapped; -f "
+            "always quantizes the whole track."
         ),
     )
     parser.add_argument(
@@ -731,11 +748,11 @@ def main():
         help=(
             "Transpose the chords in the selected label track of the open "
             "project by SEMITONES half steps (negative transposes down), in "
-            "place: labels starting inside the current time selection are "
-            "transposed (the whole track when nothing is selected, or with -f), "
-            "and the versioned .txt is updated to match. Label text that is not "
-            "a chord (section markers, lyric cues, fingerings) is left alone and "
-            "reported. Chords are spelled with flats unless -s is given."
+            "place, and update its versioned .txt to match. Label text that is "
+            "not a chord (section markers, lyric cues, fingerings) is left alone "
+            "and reported. Chords are spelled with flats unless -s is given. "
+            "When a time selection is active, only the labels starting inside it "
+            "are transposed; -f always transposes the whole track."
         ),
     )
     parser.add_argument(
@@ -754,10 +771,11 @@ def main():
         version=get_version_info(_pkg_version("rebuildap")),
     )
     args = parser.parse_args()
-    if args.deep and not args.check:
-        parser.error("--deep only applies with --check/-c.")
-    if args.force and (args.filename or args.check or args.label):
-        parser.error("--force applies only to the no-argument export, -q or -t.")
+    # -f is valid for -c (compare every label file, past the mtime gate), -q, -t
+    # and the no-argument export. It is meaningless for a rebuild or a label
+    # import - note -c takes a filename, so a filename alone does not disqualify.
+    if args.force and (args.label or (args.filename and not args.check)):
+        parser.error("--force applies to -c, -q, -t or the no-argument export.")
     if args.quantize is not None and (args.filename or args.check or args.label):
         parser.error(
             "--quantize operates on the open project; not with a filename, -c, or -l."
@@ -779,7 +797,9 @@ def main():
         args.label,
         args.check,
         save=not args.no_save,
-        deep=args.deep,
+        # The CLI surface is -f; the internal concept stays "deep" because that
+        # is what it does - skip the mtime gate and compare everything.
+        deep=args.force,
         force=args.force,
         quantize=args.quantize,
         transpose=args.transpose,

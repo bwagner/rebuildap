@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "rebuildap"
-version = "0.0.2"
+version = "0.0.3"
 authors = [
   { name="Bernhard Wagner", email="rebuildap@nosuch.biz" },
 ]
@@ -45,6 +45,12 @@ rebuildap = "rebuildap:main"
 # The audacity-marked tests need a live GUI Audacity, so they are deselected by
 # default; run them with `uv run pytest -m audacity`.
 addopts = "-m 'not audacity'"
+# An exception raised in a background thread cannot fail the test that spawned
+# it — pytest can only warn. The upgrade-dialog watcher runs in such a thread, so
+# an offline test reaching the live layer from it was invisible. Make it fatal.
+filterwarnings = [
+    "error::pytest.PytestUnhandledThreadExceptionWarning",
+]
 markers = [
     "audacity: needs a running Audacity, a GUI login session and Accessibility permission",
 ]
