@@ -538,43 +538,43 @@ def test_quantize_labels_failure_becomes_a_quantize_error(monkeypatch, tmp_path)
 # --- resolving where -q writes the versioned .txt ---------------------------
 
 
-def test_resolve_quantize_dir_prefers_cwd_when_it_holds_the_project(
+def test_resolve_project_dir_prefers_cwd_when_it_holds_the_project(
     monkeypatch, tmp_path
 ):
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "song.aup3").write_text("")
-    assert rb._resolve_quantize_dir("song") == tmp_path
+    assert rb._resolve_project_dir("song", "-q") == tmp_path
 
 
-def test_resolve_quantize_dir_uses_the_sole_recent_project_dir(monkeypatch, tmp_path):
+def test_resolve_project_dir_uses_the_sole_recent_project_dir(monkeypatch, tmp_path):
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)  # cwd does not hold the project
     proj = tmp_path / "proj"
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [proj])
-    assert rb._resolve_quantize_dir("song") == proj
+    assert rb._resolve_project_dir("song", "-q") == proj
 
 
-def test_resolve_quantize_dir_refuses_when_ambiguous(monkeypatch, tmp_path, capsys):
+def test_resolve_project_dir_refuses_when_ambiguous(monkeypatch, tmp_path, capsys):
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         af, "find_recent_project_dirs", lambda _s: [Path("/a"), Path("/b")]
     )
-    assert rb._resolve_quantize_dir("song") is None
+    assert rb._resolve_project_dir("song", "-q") is None
     err = capsys.readouterr().err
     assert "/a" in err and "/b" in err
 
 
-def test_resolve_quantize_dir_refuses_when_unknown(monkeypatch, tmp_path, capsys):
+def test_resolve_project_dir_refuses_when_unknown(monkeypatch, tmp_path, capsys):
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
-    assert rb._resolve_quantize_dir("song") is None
+    assert rb._resolve_project_dir("song", "-q") is None
     assert "not in Audacity's Open Recent" in capsys.readouterr().err
 
 

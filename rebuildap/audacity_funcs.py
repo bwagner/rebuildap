@@ -15,6 +15,7 @@ from typing import Dict, Generator, Iterable, List, Optional, Tuple
 
 import pyaudacity as pa
 import pyperclip
+from transpose import transpose_label_text
 
 from .utils import LabelFormatError, normalize_label_line
 
@@ -1412,6 +1413,107 @@ def read_time_selection() -> Tuple[float, float]:
         return _parse_selection_file(out_path)
     finally:
         out_path.unlink(missing_ok=True)
+
+
+# --- transpose a selected label track's chords (the `-t` mode) ---------------
+#
+# Snap-free sibling of `-q`: same spine (resolve the selected track, resolve the
+# selection scope, swap the new content in), but the *text* changes and the
+# times do not. The chord parsing lives in the sister `transpose` package, which
+# knows nothing about Audacity or the label format -- this module owns the
+# format, that one owns the question "is this token a chord".
+
+
+def _transposed_labels(
+    labels: List[Tuple[float, float, str]],
+    semitones: int,
+    prefer_flats: bool,
+    selection: Optional[Tuple[float, float]],
+) -> Tuple[List[Tuple[float, float, str]], List[str]]:
+    """Transpose the in-scope labels' chords. Returns ``(labels, skipped)``.
+
+    Scoping is per **label, by start position** -- deliberately unlike ``-q``'s
+    per-boundary rule, because a chord belongs to its onset and there is no half
+    a label to transpose. ``selection`` of ``None`` means the whole track.
+
+    ``skipped`` names the in-scope labels whose text held no chord at all, so the
+    caller can report them; a label that is merely out of scope was never
+    attempted and is not listed, and neither is an empty label. Times are never
+    touched.
+
+    ``prefer_flats`` is passed on explicitly rather than left to the library's
+    default, which is the opposite (see decisions.md 2026-07-25 12:45).
+    """
+    sel_start, sel_end = selection if selection else (None, None)
+
+    def in_scope(start: float) -> bool:
+        return selection is None or sel_start <= start <= sel_end
+
+    out: List[Tuple[float, float, str]] = []
+    skipped: List[str] = []
+    for start, end, text in labels:
+        if not in_scope(start):
+            out.append((start, end, text))
+            continue
+        transposed = transpose_label_text(text, semitones, prefer_flats)
+        if transposed is None:
+            if text.strip():
+                skipped.append(text)
+            out.append((start, end, text))
+        else:
+            out.append((start, end, transposed))
+    return out, skipped
+
+
+def transpose_selected_label_track(
+    semitones: int,
+    prefer_flats: bool = True,
+    verbose: bool = False,
+    whole_track: bool = False,
+) -> Tuple[str, int, str, str, bool, List[str]]:
+    """Transpose the selected label track's chords, in place.
+
+    Returns ``(target_name, target_index, stem, content, changed, skipped)`` --
+    the same shape ``-q`` returns plus the list of in-scope labels that held no
+    chord. ``content`` is the canonical ``.txt`` form for the caller to write as
+    the versioned source of truth; it is also exactly what was imported, so file
+    and track cannot diverge.
+
+    Flats by default: the corpus this serves is flat-heavy, unlike the sister
+    library's own sharps default. See :func:`_transposed_labels`.
+
+    As with ``-q``, the selection is resolved *before* the project is touched, a
+    track whose content does not change is left entirely alone (no mtime bump,
+    no undo churn), and every precondition failure is a :class:`LabelTrackError`.
+    """
+    tracks = get_tracks()
+    target_index, target_name = resolve_selected_label_track(tracks)
+    stem = open_project_wave_stem(tracks)
+    contents = get_label_tracks_content_via_getinfo()
+    selection = resolve_selection_scope(whole_track)
+
+    orig_labels = _labels_from_txt(contents[target_name])
+    final_labels, skipped = _transposed_labels(
+        orig_labels, semitones, prefer_flats, selection
+    )
+    content = _format_track_txt(final_labels)
+    if verbose:
+        _report_transposed_count(orig_labels, final_labels, skipped, selection)
+    changed = replace_label_track(
+        target_index, target_name, content, contents[target_name]
+    )
+    return target_name, target_index, stem, content, changed, skipped
+
+
+def _report_transposed_count(orig_labels, final_labels, skipped, selection) -> None:
+    """Under ``-v``: how many labels actually changed, scoped to the selection."""
+    moved = sum(1 for o, f in zip(orig_labels, final_labels) if o[2] != f[2])
+    where = (
+        f" in selection {selection[0]:.3f}-{selection[1]:.3f}"
+        if selection
+        else " (whole track)"
+    )
+    print(f"Transposed {moved} label(s){where}; {len(skipped)} held no chord.")
 
 
 def _scope_to_selection(

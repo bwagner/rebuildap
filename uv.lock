@@ -127,6 +127,7 @@ dependencies = [
     { name = "psutil" },
     { name = "pyaudacity" },
     { name = "pyperclip" },
+    { name = "transpose" },
 ]
 
 [package.dev-dependencies]
@@ -139,6 +140,7 @@ requires-dist = [
     { name = "psutil" },
     { name = "pyaudacity", git = "https://github.com/bwagner/pyaudacity.git" },
     { name = "pyperclip" },
+    { name = "transpose", git = "https://github.com/bwagner/transpose.git" },
 ]
 
 [package.metadata.requires-dev]
@@ -197,6 +199,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/5a/cd/e80b62269fc78fc36c9af5a6b89c835baa8af28ff5ad28c7028d60860320/tomli-2.4.1-cp314-cp314t-win_arm64.whl", hash = "sha256:eab21f45c7f66c13f2a9e0e1535309cee140182a9cdae1e041d02e47291e8396", size = 100393, upload-time = "2026-03-25T20:22:02.137Z" },
     { url = "https://files.pythonhosted.org/packages/7b/61/cceae43728b7de99d9b847560c262873a1f6c98202171fd5ed62640b494b/tomli-2.4.1-py3-none-any.whl", hash = "sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe", size = 14583, upload-time = "2026-03-25T20:22:03.012Z" },
 ]
+
+[[package]]
+name = "transpose"
+version = "0.1.0"
+source = { git = "https://github.com/bwagner/transpose.git#280ea651db9dcd95e834329db5df4d02423f6b4e" }
 
 [[package]]
 name = "typing-extensions"

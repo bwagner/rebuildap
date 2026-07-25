@@ -92,7 +92,8 @@ batch runs never stop for a dialog. There's a small precision trade-off:
 ## Usage
 
 ```console
-usage: rebuildap [-h] [-v] [-l] [-c] [-d] [-n] [-f] [-q [BEATS_TRACK]] [-V]
+usage: rebuildap [-h] [-v] [-l] [-c] [-d] [-n] [-f] [-q [BEATS_TRACK]]
+                 [-t SEMITONES] [-s] [-V]
                  [filename]
 
 rebuild Audacity project
@@ -131,6 +132,18 @@ options:
                         original position, and its versioned .txt is updated
                         to match. Give a track name to pick the reference, or
                         omit it to auto-detect it.
+  -t, --transpose SEMITONES
+                        Transpose the chords in the selected label track of
+                        the open project by SEMITONES half steps (negative
+                        transposes down), in place: labels starting inside the
+                        current time selection are transposed (the whole track
+                        when nothing is selected, or with -f), and the
+                        versioned .txt is updated to match. Label text that is
+                        not a chord (section markers, lyric cues, fingerings)
+                        is left alone and reported. Chords are spelled with
+                        flats unless -s is given.
+  -s, --sharps          With -t, spell transposed chords with sharps (A#)
+                        instead of the default flats (Bb).
   -V, --version         show program's version number and exit
 
 Input modes:
@@ -138,6 +151,10 @@ Input modes:
   .aup3        its label tracks are exported to .txt files
   (nothing)    the open Audacity project is used — selected label
                tracks are exported, or all of them if none are selected
+
+Transform modes (-q, -t) take no filename: they rewrite the selected
+label track of the open project in place and update its versioned
+.txt. One at a time.
 ```
 
 ## Prerequisites
@@ -154,6 +171,11 @@ Input modes:
   if [audacity#7171](https://github.com/audacity/audacity/issues/7171) ever lands,
   the plug-in becomes unnecessary.
 - [uv](https://docs.astral.sh/uv/)
+- For `-q` only: [quantize_labels](https://github.com/bwagner/quantize_labels)
+  on your `$PATH` (as `quantize_labels.py` or `quantize_labels`), which does the
+  snapping. `-t` needs nothing extra — its sister
+  [transpose](https://github.com/bwagner/transpose) is a declared dependency and
+  is installed with `rebuildap`.
 
 ## Install
 
@@ -224,7 +246,10 @@ them and needs a GUI login session.
 
 - [audacity_click_label](https://github.com/bwagner/audacity_click_label)
 - [audacity_shift_labels](https://github.com/bwagner/audacity_shift_labels)
-- [quantize_labels](https://github.com/bwagner/quantize_labels)
+- [quantize_labels](https://github.com/bwagner/quantize_labels) — does the
+  snapping behind `-q`
+- [transpose](https://github.com/bwagner/transpose) — does the chord
+  transposition behind `-t`
 - [beats2bars](https://github.com/bwagner/beats2bars)
 - [audacity_legatize](https://github.com/bwagner/audacity_legatize)
 - [pyaudacity](https://github.com/bwagner/pyaudacity)

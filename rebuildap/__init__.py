@@ -263,12 +263,17 @@ def rebuild(
     deep=False,
     force=False,
     quantize=None,
+    transpose=None,
+    sharps=False,
 ):
     if check:
         check_label_age(filename, verbose, deep=deep)
     elif quantize is not None:
         # Operates on the open project, no filename (guarded in main()).
         _quantize_open_project(quantize, verbose, force)
+    elif transpose is not None:
+        # Likewise open-project only, and mutually exclusive with -q.
+        _transpose_open_project(transpose, sharps, verbose, force)
     elif filename:
         filename = Path(filename)
         if label:
@@ -427,16 +432,17 @@ def _export_open_project_labels(verbose, force=False):
     _report_exports(exported)
 
 
-def _resolve_quantize_dir(stem):
-    """Directory for ``-q``'s versioned ``.txt`` -- the open project's own directory.
+def _resolve_project_dir(stem, flag):
+    """Directory for an in-place mode's versioned ``.txt`` -- the open project's own.
 
-    Unlike the no-arg export (which only ever writes cwd), ``-q`` writes to
-    wherever the project actually lives, so the file and the just-quantized
-    project stay consistent no matter what cwd the command was run from: cwd when
-    it holds the project, else the single directory Audacity's Open Recent
-    reports for this stem. Refuses (returns ``None``, explaining on stderr) when
-    that directory is ambiguous (same stem in several places) or unknown, so a
-    source-of-truth file is never scattered.
+    Unlike the no-arg export (which only ever writes cwd), the in-place modes
+    (``-q``, ``-t``) write to wherever the project actually lives, so the file and
+    the just-modified project stay consistent no matter what cwd the command was
+    run from: cwd when it holds the project, else the single directory Audacity's
+    Open Recent reports for this stem. Refuses (returns ``None``, explaining on
+    stderr) when that directory is ambiguous (same stem in several places) or
+    unknown, so a source-of-truth file is never scattered. ``flag`` names the mode
+    in the advice, so the message says how to re-run what was actually attempted.
     """
     cwd = Path.cwd()
     if af.dir_holds_project(cwd, stem):
@@ -452,12 +458,14 @@ def _resolve_quantize_dir(stem):
         )
         for directory in candidates:
             print(f"{_PATH_INDENT}{directory}", file=sys.stderr)
-        print("cd into the right one and run `rebuildap -q` there.", file=sys.stderr)
+        print(
+            f"cd into the right one and run `rebuildap {flag}` there.", file=sys.stderr
+        )
         return None
     print(
         f"Could not locate the directory of the open project '{stem}' (it is not "
         "in Audacity's Open Recent), so its label file cannot be written. cd into "
-        "the project directory and run `rebuildap -q` there.",
+        f"the project directory and run `rebuildap {flag}` there.",
         file=sys.stderr,
     )
     return None
@@ -482,7 +490,7 @@ def _quantize_open_project(quantize, verbose, force=False):
     if not prerequisites_met(verbose):
         return
     stem = af.open_project_wave_stem()
-    out_dir = _resolve_quantize_dir(stem)
+    out_dir = _resolve_project_dir(stem, "-q")
     if out_dir is None:
         return
     try:
@@ -541,6 +549,82 @@ def _report_quantize_outcome(target_name, out_path, changed, wrote):
         )
 
 
+def _transpose_open_project(semitones, sharps, verbose, force=False):
+    """Transpose the selected label track's chords in place, then persist.
+
+    Mirrors :func:`_quantize_open_project`: the write directory is resolved
+    *before* the project is touched, only labels starting inside the current time
+    selection are transposed (whole track when nothing is selected, or with
+    ``-f``), and the result is written straight to the project's own directory.
+
+    ``sharps`` (``-s``) opts out of the flat spelling ``-t`` defaults to.
+    """
+    if not prerequisites_met(verbose):
+        return
+    stem = af.open_project_wave_stem()
+    out_dir = _resolve_project_dir(stem, f"-t {semitones}")
+    if out_dir is None:
+        return
+    try:
+        target_name, _idx, _stem, content, changed, skipped = (
+            af.transpose_selected_label_track(
+                semitones, prefer_flats=not sharps, verbose=verbose, whole_track=force
+            )
+        )
+    except af.SelectionReadError as e:
+        raise SystemExit(
+            f"Could not read the Audacity selection: {e} Re-run with -f to "
+            "transpose the whole track."
+        ) from e
+    except af.LabelTrackError as e:
+        raise SystemExit(f"{e}") from e
+    out_path = out_dir / af._derive_label_filename(target_name, stem)
+    wrote = _write_if_divergent(out_path, content)
+    _report_transpose_outcome(
+        target_name, out_path, semitones, not sharps, changed, wrote, skipped
+    )
+
+
+# How many untransposed label texts to name before summarizing the rest -- a
+# chord track can hold hundreds of non-chord labels and dumping them all would
+# bury the result.
+_MAX_SKIPPED_LISTED = 8
+
+
+def _report_transpose_outcome(
+    target_name, out_path, semitones, prefer_flats, changed, wrote, skipped
+):
+    """State plainly what ``-t`` did, naming the spelling it used.
+
+    The spelling is always named: rebuildap defaults to flats while the sister
+    library defaults to sharps, so a chart coming back respelled must never be a
+    silent surprise (decisions.md 2026-07-25 12:45). Labels that held no chord are
+    named too -- silence there is the failure mode ``-q`` and the no-arg export
+    both had to fix.
+    """
+    spelling = "flats" if prefer_flats else "sharps"
+    how = f"by {semitones:+d} half steps, spelled with {spelling}"
+    if not changed and not skipped:
+        print(f"Label track '{target_name}' is unchanged {how}; nothing to do.")
+    elif not changed:
+        print(
+            f"Label track '{target_name}' holds no chords to transpose; nothing done."
+        )
+    else:
+        print(f"Transposed label track '{target_name}' {how}:")
+        print(f"{_PATH_INDENT}{out_path}")
+        if not wrote:
+            print(f"{_PATH_INDENT}(its label file was already up to date)")
+    if skipped:
+        shown = skipped[:_MAX_SKIPPED_LISTED]
+        rest = len(skipped) - len(shown)
+        print(f"Left alone ({len(skipped)} label(s) held no chord):")
+        for text in shown:
+            print(f"{_PATH_INDENT}{text}")
+        if rest:
+            print(f"{_PATH_INDENT}... and {rest} more")
+
+
 def _report_exports(exported):
     """Print one line per exported label track: its name and the full path written.
 
@@ -565,6 +649,10 @@ def main():
             "  .aup3        its label tracks are exported to .txt files\n"
             "  (nothing)    the open Audacity project is used — selected label\n"
             "               tracks are exported, or all of them if none are selected\n"
+            "\n"
+            "Transform modes (-q, -t) take no filename: they rewrite the selected\n"
+            "label track of the open project in place and update its versioned\n"
+            ".txt. One at a time.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -635,6 +723,31 @@ def main():
         ),
     )
     parser.add_argument(
+        "-t",
+        "--transpose",
+        type=int,
+        default=None,
+        metavar="SEMITONES",
+        help=(
+            "Transpose the chords in the selected label track of the open "
+            "project by SEMITONES half steps (negative transposes down), in "
+            "place: labels starting inside the current time selection are "
+            "transposed (the whole track when nothing is selected, or with -f), "
+            "and the versioned .txt is updated to match. Label text that is not "
+            "a chord (section markers, lyric cues, fingerings) is left alone and "
+            "reported. Chords are spelled with flats unless -s is given."
+        ),
+    )
+    parser.add_argument(
+        "-s",
+        "--sharps",
+        action="store_true",
+        help=(
+            "With -t, spell transposed chords with sharps (A#) instead of the "
+            "default flats (Bb)."
+        ),
+    )
+    parser.add_argument(
         "-V",
         "--version",
         action="version",
@@ -644,11 +757,22 @@ def main():
     if args.deep and not args.check:
         parser.error("--deep only applies with --check/-c.")
     if args.force and (args.filename or args.check or args.label):
-        parser.error("--force applies only to the no-argument export or -q.")
+        parser.error("--force applies only to the no-argument export, -q or -t.")
     if args.quantize is not None and (args.filename or args.check or args.label):
         parser.error(
             "--quantize operates on the open project; not with a filename, -c, or -l."
         )
+    if args.transpose is not None and (args.filename or args.check or args.label):
+        parser.error(
+            "--transpose operates on the open project; not with a filename, -c, or -l."
+        )
+    if args.quantize is not None and args.transpose is not None:
+        parser.error(
+            "--quantize and --transpose both rewrite the selected label track; "
+            "run one at a time."
+        )
+    if args.sharps and args.transpose is None:
+        parser.error("--sharps only applies with --transpose/-t.")
     rebuild(
         args.filename,
         args.verbose,
@@ -658,6 +782,8 @@ def main():
         deep=args.deep,
         force=args.force,
         quantize=args.quantize,
+        transpose=args.transpose,
+        sharps=args.sharps,
     )
 
 

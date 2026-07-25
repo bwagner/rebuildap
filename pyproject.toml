@@ -20,6 +20,7 @@ dependencies = [
     "pyperclip",
     "psutil",
     "pyaudacity @ git+https://github.com/bwagner/pyaudacity.git",
+    "transpose @ git+https://github.com/bwagner/transpose.git",
 ]
 
 [dependency-groups]
