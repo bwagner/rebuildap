@@ -73,7 +73,7 @@ def test_autodetects_the_sole_beats_track_when_no_name_given():
 
 def test_no_selected_label_track_is_an_error():
     tracks = [_track("song", kind="wave"), _track("beats")]
-    with pytest.raises(af.QuantizeError, match="[Ss]elect"):
+    with pytest.raises(af.LabelTrackError, match="[Ss]elect"):
         af.resolve_quantize_targets(tracks, reference_name="beats")
 
 
@@ -83,7 +83,7 @@ def test_multiple_selected_label_tracks_is_an_error():
         _track("parts", selected=True),
         _track("beats"),
     ]
-    with pytest.raises(af.QuantizeError, match="chords|parts"):
+    with pytest.raises(af.LabelTrackError, match="chords|parts"):
         af.resolve_quantize_targets(tracks, reference_name="beats")
 
 

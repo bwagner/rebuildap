@@ -494,7 +494,9 @@ def _quantize_open_project(quantize, verbose, force=False):
             f"Could not read the Audacity selection: {e} Re-run with -f to "
             "quantize the whole track."
         ) from e
-    except af.QuantizeError as e:
+    except af.LabelTrackError as e:
+        # The base catches both the shared precondition failures (no single label
+        # track selected) and the quantize-specific QuantizeError.
         raise SystemExit(f"{e}") from e
     out_path = out_dir / af._derive_label_filename(target_name, stem)
     wrote = _write_if_divergent(out_path, content)

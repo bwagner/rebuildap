@@ -131,22 +131,34 @@ class ProjectAlreadyOpenError(RuntimeError):
     """
 
 
-class QuantizeError(RuntimeError):
+class LabelTrackError(RuntimeError):
+    """A request to transform a label track in place cannot be carried out.
+
+    The shared base for the in-place label-track modes. Raised for the
+    user-actionable precondition failures that are not specific to one mode --
+    today only "no single label track is selected", which every such mode needs,
+    since the mode acts on exactly one track and the swap removes the *selected*
+    one. The CLI turns it into a clean ``SystemExit`` naming the problem.
+    """
+
+
+class QuantizeError(LabelTrackError):
     """The ``-q`` quantize request cannot be carried out as asked.
 
-    Raised for every user-actionable precondition failure: no single label
-    track selected, the named/auto-detected beats reference is missing or
-    ambiguous, the reference is the target itself, or quantize_labels.py cannot
-    be found. The CLI turns it into a clean ``SystemExit`` naming the problem.
+    Adds the quantize-specific precondition failures to
+    :class:`LabelTrackError`: the named or auto-detected beats reference is
+    missing or ambiguous, the reference is the target itself, or
+    quantize_labels.py cannot be found.
     """
 
 
 class SelectionReadError(RuntimeError):
     """The current Audacity time selection could not be read via Nyquist.
 
-    Distinct from :class:`QuantizeError`: the fix is different (re-run with
-    ``-f`` to quantize the whole track), so the CLI catches it separately and
-    says so. Raised when the Nyquist selection accessor produces no parseable
+    Deliberately *not* a :class:`LabelTrackError`: the fix is different (re-run
+    with ``-f`` to act on the whole track), so the CLI catches it separately and
+    says so -- being outside the hierarchy keeps that from depending on except
+    order. Raised when the Nyquist selection accessor produces no parseable
     result (e.g. it does not exist on this Audacity version).
     """
 
@@ -1047,6 +1059,94 @@ def export_selected_or_all_label_tracks_via_getinfo(
     return _write_via_getinfo(indices, aup3_path)
 
 
+# --- transforming the selected label track in place (shared spine) ----------
+#
+# The modes that rewrite one label track in the open project (`-q` today) all
+# share the same skeleton: resolve the single selected label track, resolve how
+# much of it the current time selection covers, compute new content, then swap
+# that content in. Only the *computation* differs per mode, so it stays in the
+# mode's own function; the three steps around it live here.
+#
+# The label-format helpers these lean on (`_write_temp_label_txt`,
+# `_labels_from_txt`, `read_time_selection`) are defined further down with the
+# quantize block, matching this module's habit of putting helpers after their
+# callers.
+
+
+def _label_tracks(tracks: List[Dict]) -> List[Tuple[int, Dict]]:
+    """The ``(index, track)`` pairs of ``tracks`` that are label tracks."""
+    return [(i, t) for i, t in enumerate(tracks) if t.get(PROPERTY_KIND) == KIND_LABEL]
+
+
+def resolve_selected_label_track(tracks: List[Dict]) -> Tuple[int, str]:
+    """The single selected label track, as ``(index, name)``.
+
+    Zero or several selected is a :class:`LabelTrackError` -- an in-place mode
+    acts on exactly one track, and :func:`replace_label_track` removes whatever
+    is *selected*, so "exactly one" is a safety precondition, not just a
+    convenience. Pure over the ``tracks`` list, so every branch is offline-testable.
+    """
+    selected = [(i, t) for i, t in _label_tracks(tracks) if t.get(PROPERTY_SELECTED)]
+    if not selected:
+        raise LabelTrackError("Select exactly one label track; none is selected.")
+    if len(selected) > 1:
+        names = ", ".join(t[PROPERTY_NAME] for _, t in selected)
+        raise LabelTrackError(
+            f"Select exactly one label track; {len(selected)} are selected ({names})."
+        )
+    index, track = selected[0]
+    return index, track[PROPERTY_NAME]
+
+
+def resolve_selection_scope(whole_track: bool = False) -> Optional[Tuple[float, float]]:
+    """The time selection to scope a transform to, or ``None`` for the whole track.
+
+    ``None`` when ``whole_track`` is set (from ``-f``, which also skips the read
+    entirely) or when the selection is a bare cursor rather than a region. May
+    raise :class:`SelectionReadError`; callers resolve this *before* touching the
+    project so a read failure aborts cleanly rather than half-way through.
+    """
+    if whole_track:
+        return None
+    selection = read_time_selection()
+    if selection[1] - selection[0] <= _NO_REGION_EPSILON:
+        return None  # bare cursor / no region -> whole track
+    return selection
+
+
+def replace_label_track(
+    target_index: int, target_name: str, new_content: str, current_content: str
+) -> bool:
+    """Swap ``new_content`` in for the label track at ``target_index``. Returns
+    whether the project was modified.
+
+    **Order matters** and is locked by a test: remove the old track first, then
+    re-import (which always appends at the bottom), then move the re-import back
+    to the row the old track held, then re-select it -- ``make_label_track_from_file``
+    restores the prior selection on exit, so the caller would otherwise lose it.
+
+    Removal goes through ``remove_selected_tracks``, so the track at
+    ``target_index`` must be the selected one; :func:`resolve_selected_label_track`
+    guarantees that.
+
+    When ``new_content`` equals ``current_content`` the whole swap is skipped and
+    ``False`` returned -- the ``.aup3`` is left byte-identical, so an unchanged
+    track costs no mtime bump and no undo-stack churn.
+    """
+    if new_content == current_content:
+        return False
+    tmp = _write_temp_label_txt(new_content)
+    try:
+        remove_selected_tracks()
+        make_label_track_from_file(tmp, target_name)
+        new_index = get_track_count() - 1
+        move_track_to(new_index, target_index)
+        select_tracks([target_index])
+    finally:
+        tmp.unlink(missing_ok=True)
+    return True
+
+
 # --- quantize a selected label track to a beats track (the `-q` mode) --------
 #
 # Snap the selected label track's boundaries onto the grid of a beats label
@@ -1071,30 +1171,16 @@ def resolve_quantize_targets(
 
     Returns ``(target_index, target_name, reference_index, reference_name)``.
 
-    - **target**: the single *selected* label track. Zero or several selected
-      is a :class:`QuantizeError` -- the mode acts on exactly one track.
+    - **target**: the single *selected* label track, via the shared
+      :func:`resolve_selected_label_track` (raising :class:`LabelTrackError`).
     - **reference**: the label track named ``reference_name`` when given, else
       the sole label track whose name looks like a beats track. Missing,
       ambiguous, or coinciding with the target all raise :class:`QuantizeError`.
 
     Pure over the ``tracks`` list, so every branch is exercised offline.
     """
-    label_tracks = [
-        (i, t) for i, t in enumerate(tracks) if t.get(PROPERTY_KIND) == KIND_LABEL
-    ]
-    selected = [(i, t) for i, t in label_tracks if t.get(PROPERTY_SELECTED)]
-    if not selected:
-        raise QuantizeError(
-            "Select exactly one label track to quantize; none is selected."
-        )
-    if len(selected) > 1:
-        names = ", ".join(t[PROPERTY_NAME] for _, t in selected)
-        raise QuantizeError(
-            f"Select exactly one label track to quantize; {len(selected)} are "
-            f"selected ({names})."
-        )
-    target_index, target = selected[0]
-    target_name = target[PROPERTY_NAME]
+    label_tracks = _label_tracks(tracks)
+    target_index, target_name = resolve_selected_label_track(tracks)
 
     if reference_name is None:
         beats = [
@@ -1200,11 +1286,7 @@ def quantize_selected_label_track(
 
     # Resolve the selection scope before mutating anything, so a selection-read
     # failure aborts cleanly (the caller turns it into "re-run with -f").
-    selection: Optional[Tuple[float, float]] = None
-    if not whole_track:
-        selection = read_time_selection()
-        if selection[1] - selection[0] <= _NO_REGION_EPSILON:
-            selection = None  # bare cursor / no region -> whole track
+    selection = resolve_selection_scope(whole_track)
 
     ref_tmp = _write_temp_label_txt(contents[reference_name])
     target_tmp = _write_temp_label_txt(contents[target_name])
@@ -1242,22 +1324,14 @@ def quantize_selected_label_track(
         # This canonical form is both the versioned .txt and, re-written to the
         # temp, the exact bytes imported -- so file and track cannot diverge.
         quantized_content = _format_track_txt(final_labels)
-        # contents[...] is canonical too, so a plain compare tells if anything moved.
-        changed = quantized_content != contents[target_name]
-        if changed:
-            target_tmp.write_text(quantized_content)
-            # Order matters: drop the old track first, then re-import, then move
-            # the re-imported track (always appended at the bottom) to its old row.
-            remove_selected_tracks()
-            make_label_track_from_file(target_tmp, target_name)
-            new_index = get_track_count() - 1
-            move_track_to(new_index, target_index)
-            # make_label_track_from_file restores the prior selection on exit, so
-            # re-select the quantized track by index for the caller.
-            select_tracks([target_index])
     finally:
         ref_tmp.unlink(missing_ok=True)
         target_tmp.unlink(missing_ok=True)
+    # contents[...] is canonical too, so replace_label_track's plain compare tells
+    # whether anything actually moved, and skips the swap entirely when it did not.
+    changed = replace_label_track(
+        target_index, target_name, quantized_content, contents[target_name]
+    )
     return target_name, target_index, stem, quantized_content, changed
 
 
