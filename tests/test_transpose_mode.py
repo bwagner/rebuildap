@@ -65,6 +65,50 @@ def test_a_label_spanning_the_whole_selection_is_left_alone():
     assert new == [(0.0, 9.0, "Am")]
 
 
+# --- rounded selection edges -------------------------------------------------
+#
+# The selection and the label times are two independently rounded views of the
+# same instants: GetInfo and Nyquist each report ~6 significant digits and can
+# disagree by one unit in the last place. Clicking a label track selects exactly
+# first-label-start .. last-label-end, so those two labels sit *on* the edges and
+# are the ones a strict comparison drops. Values below are measured, not invented:
+# a selection set to 5.13097 was read back from Nyquist as 5.13098 (2026-07-29).
+
+
+def test_first_label_survives_a_selection_start_rounded_up():
+    """Nyquist reported the region start one ulp *above* the label it came from."""
+    new, _ = af._transposed_labels(
+        _labels((5.13097, 5.13097, "C")), 2, True, (5.13098, 20.5637)
+    )
+    assert new == [(5.13097, 5.13097, "D")]
+
+
+def test_last_label_survives_a_selection_end_rounded_down():
+    """Mirror case at the far edge. A point label has no width to absorb it."""
+    new, _ = af._transposed_labels(
+        _labels((20.5637, 20.5637, "F")), 2, True, (5.13097, 20.5636)
+    )
+    assert new == [(20.5637, 20.5637, "G")]
+
+
+def test_a_label_genuinely_outside_is_still_left_alone():
+    """The tolerance must not swallow a label that is really out of the region --
+    otherwise it silently becomes a whole-track transpose."""
+    new, _ = af._transposed_labels(
+        _labels((4.0, 4.5, "C"), (25.0, 25.5, "C")), 2, True, (5.13098, 20.5636)
+    )
+    assert new == [(4.0, 4.5, "C"), (25.0, 25.5, "C")]
+
+
+def test_tolerance_scales_with_magnitude():
+    """Six significant digits means coarser absolute steps further out: ~1e-5 at
+    5 s but ~1e-2 at 3600 s. A fixed epsilon would be too tight out here."""
+    new, _ = af._transposed_labels(
+        _labels((3600.01, 3600.01, "C")), 2, True, (3600.02, 4000.0)
+    )
+    assert new == [(3600.01, 3600.01, "D")]
+
+
 def test_label_times_are_never_modified():
     new, _ = af._transposed_labels(_labels((1.25, 3.5, "Am")), 5, True, None)
     assert [(s, e) for s, e, _ in new] == [(1.25, 3.5)]

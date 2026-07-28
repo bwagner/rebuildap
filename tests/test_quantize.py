@@ -356,6 +356,30 @@ def test_scope_point_label_inside_and_outside():
     ]
 
 
+def test_scope_tolerates_selection_edges_rounded_off_the_boundary():
+    """The selection and the label times are independently rounded to ~6
+    significant digits, so an edge can land one ulp off the boundary it was taken
+    from -- measured: a region set to 5.13097 read back as 5.13098. Without
+    tolerance the first and last boundaries of a click-selected label track are
+    silently left unquantized."""
+    orig = [(5.13097, 5.13097, "first"), (20.5637, 20.5637, "last")]
+    quant = [(5.2, 5.2, "first"), (20.6, 20.6, "last")]
+    # region reported one ulp *inside* at both ends
+    assert af._scope_to_selection(orig, quant, (5.13098, 20.5636)) == [
+        (5.2, 5.2, "first"),
+        (20.6, 20.6, "last"),
+    ]
+
+
+def test_scope_tolerance_does_not_reach_a_genuinely_outside_boundary():
+    orig = [(1.0, 1.0, "before"), (30.0, 30.0, "after")]
+    quant = [(1.5, 1.5, "before"), (30.5, 30.5, "after")]
+    assert af._scope_to_selection(orig, quant, (5.13098, 20.5636)) == [
+        (1.0, 1.0, "before"),
+        (30.0, 30.0, "after"),
+    ]
+
+
 # --- selection scoping wired through the orchestrator -----------------------
 
 

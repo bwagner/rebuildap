@@ -269,6 +269,43 @@ saved-as states, since several of the workarounds above rest on it:
   `close_owned_window` sees two identical titles and refuses as ambiguous — but
   anything new relying on the title should not assume a file exists behind it.
 
+## Two roundings of the same instant never quite agree
+
+Label times and the time selection reach `rebuildap` by different routes, and
+**both are rounded to about six significant digits on the way**:
+
+- label times come from `GetInfo`, which has the 3-decimal precision floor
+  described in [label export](label-export.md);
+- the selection comes from the Nyquist read (`_NY_SELECTION_TEMPLATE`), whose
+  `~a` directive prints floats with comparable precision.
+
+So the same underlying instant can arrive as two different numbers, differing by
+one unit in the last place. Measured on 3.7.8 (2026-07-29): a region set to
+`5.13097` was read back as `5.13098`.
+
+That is normally invisible — until the selection edge *is* a label boundary,
+which is exactly what the natural gesture produces. Clicking a label track makes
+Audacity select `first-label-start .. last-label-end`, putting those two labels
+precisely on the edges. A strict `sel_start <= t <= sel_end` then drops them, so
+`transpose` and `quantize` quietly skipped the first and last label of the track
+the user had just clicked — no error, no warning, just two labels left behind.
+Point labels (`start == end`) are the worst case: with no width, the label has
+nothing to absorb the discrepancy.
+
+The fix is tolerance, not precision. Getting more digits out of Nyquist would
+not help, because the *label* side is rounded too: an accurate selection compared
+against a rounded label start fails just as readily. `_within_selection()` therefore
+treats a boundary as on an edge when it is within `_SELECTION_EDGE_REL_TOL` of it,
+and both scoping call sites share it.
+
+The tolerance is **relative** because the absolute step grows with magnitude —
+six significant digits is ~1e-5 at 5 s but ~1e-2 at an hour, so a fixed epsilon
+would be right at one end of a project and wrong at the other. It is bounded
+below by an absolute floor for times near zero, where the relative test collapses.
+Tests pin both directions: the boundary cases must be included, and a label
+genuinely outside the region must stay outside — a tolerance wide enough to
+swallow that would silently turn a scoped run into a whole-track one.
+
 ## When an .aup3 changes on disk
 
 An `.aup3` is a SQLite database — hence the `.aup3-shm` / `.aup3-wal` companions

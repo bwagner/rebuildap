@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import json
+import math
 import os
 import re
 import shutil
@@ -233,6 +234,38 @@ _NY_SELECTION_TEMPLATE = (
 _SELECTION_READ_TIMEOUT = 15.0
 # Selection narrower than this (a bare cursor) counts as "no region" -> whole track.
 _NO_REGION_EPSILON = 1e-6
+# How far off an edge a boundary may sit and still count as on it.
+#
+# The selection and the label times are two *independently rounded* views of the
+# same instants: `GetInfo` reports label times to ~6 significant digits, and the
+# Nyquist selection read prints its floats to ~6 as well, so the two can disagree
+# by one unit in the last place. Clicking a label track selects exactly
+# first-label-start .. last-label-end, which puts those labels *on* the edges --
+# precisely where a strict `<=` drops them, silently leaving the first and last
+# label of a click-selected track untransposed/unquantized.
+#
+# Measured 2026-07-29 (3.7.8): a region set to 5.13097 read back as 5.13098.
+# The tolerance is *relative* because the absolute step grows with magnitude
+# (~1e-5 at 5 s, ~1e-2 at 3600 s); 1e-5 covers one unit in the sixth significant
+# digit at any magnitude, while staying far below any real gap between labels.
+# The absolute floor covers times near zero, where the relative test collapses.
+_SELECTION_EDGE_REL_TOL = 1e-5
+_SELECTION_EDGE_ABS_TOL = 1e-6
+
+
+def _within_selection(t: float, sel_start: float, sel_end: float) -> bool:
+    """True when ``t`` is inside ``[sel_start, sel_end]`` -- or close enough to an
+    edge that the difference is below what either side can report."""
+    if sel_start <= t <= sel_end:
+        return True
+    return any(
+        math.isclose(
+            t, edge, rel_tol=_SELECTION_EDGE_REL_TOL, abs_tol=_SELECTION_EDGE_ABS_TOL
+        )
+        for edge in (sel_start, sel_end)
+    )
+
+
 # A boundary counts as "moved" for the -v summary if it shifted by more than this.
 _ADJUSTMENT_EPSILON = 1e-9
 
@@ -1566,7 +1599,7 @@ def _transposed_labels(
     sel_start, sel_end = selection if selection else (None, None)
 
     def in_scope(start: float) -> bool:
-        return selection is None or sel_start <= start <= sel_end
+        return selection is None or _within_selection(start, sel_start, sel_end)
 
     out: List[Tuple[float, float, str]] = []
     skipped: List[str] = []
@@ -1649,7 +1682,7 @@ def _scope_to_selection(
     sel_start, sel_end = selection
 
     def inside(t: float) -> bool:
-        return sel_start <= t <= sel_end
+        return _within_selection(t, sel_start, sel_end)
 
     scoped: List[Tuple[float, float, str]] = []
     for (o_start, o_end, o_text), (q_start, q_end, _q_text) in zip(orig, quantized):
