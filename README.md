@@ -71,6 +71,14 @@ directory anyway. Each export is reported (the track name, then its full path on
 its own line), so a successful run is never silent and its destination is always
 visible.
 
+The files are named after the open project's **`.aup3` stem**, so a transposed
+copy `song_G.aup3` writes `chords_song_G.txt` and never touches the original's
+`chords_song.txt` - even though both projects share a wave track called `song`.
+With several projects open the **frontmost** one is used, which is also the one
+Audacity's scripting pipe acts on; if something other than a project is in front,
+rebuildap says so instead of guessing. See
+[Which project the exported files are named after](docs/label-export.md#which-project-the-exported-files-are-named-after).
+
 After a rebuild the project is saved as `<audio-stem>.aup3` **beside the audio
 file**, not in the current directory, so `-c` has something to check and a crash
 doesn't cost you the rebuild.

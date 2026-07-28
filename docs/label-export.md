@@ -3,6 +3,64 @@
 Why `rebuildap` exports labels the way it does, and what it costs.
 Back to the [README](../README.md).
 
+## Which project the exported files are named after
+
+A label file is named `<track>_<stem>.txt`, and `<stem>` is the open project's
+**`.aup3` filename stem** - not the name of its wave track.
+
+The two are usually the same, because a project rebuilt from `song.opus` is
+saved as `song.aup3` and its wave track is called `song`. They come apart as
+soon as a project is copied: Save-As on `song.aup3` produces `song_G.aup3` whose
+wave track is *still* called `song`. This is the normal way to keep a transposed
+variant beside its original, and naming by the wave track made the variant write
+its labels straight over the original's files.
+
+Audacity has no query for "which file is this project?" - `AXDocument` is
+`missing value` and there is no `GetInfo: Type=Project` (see
+[Audacity quirks](audacity-quirks.md)). So `open_project_stem` intersects the
+two partial routes:
+
+- **window titles** say which projects are *open*, but carry no path, and an
+  unsaved project is titled with the stem of the audio it was built from;
+- **Open Recent** gives real, full paths, but is a recency list - it holds
+  closed projects and can evict open ones.
+
+A name that is both an open window and a file on disk is the project. Two
+same-stem projects in different directories collapse to one answer, which is
+correct here: the stem is the same either way.
+
+When that yields **several differently-named projects**, the **frontmost** one
+wins. That is not a guess: mod-script-pipe acts on the frontmost project window,
+measured on 3.7.8 (2026-07-28) with two projects open and a uniquely named label
+track in each - the tracks reported by `GetInfo` followed the window focus. So
+the project rebuildap names its files after is the same project the commands
+themselves touch.
+
+It refuses only when that tiebreaker cannot be applied: something other than a
+project is frontmost (a modal dialog, the About box), or the front window cannot
+be read at all - `frontmost_audacity_window_name()` returns `None` for an
+Accessibility refusal as well as for "no windows", so `None` is never taken as an
+answer. Bring the project you mean to the front and run again.
+
+A single candidate is returned without consulting the frontmost window at all,
+so a dialog sitting in front of the only open project cannot turn a working
+export into a refusal.
+
+One residual: the tie is broken at the moment identity is resolved, and nothing
+stops you switching windows mid-run. It is a seconds-wide gap, and every mode
+prints the full path it wrote, so a mis-targeted run is visible in its own
+output rather than silent.
+
+When it yields **nothing** - a never-saved project, or one evicted from Open
+Recent - it falls back to the wave track's name and says so on stderr. A
+never-saved project has no `.aup3` stem to find, and refusing to export it would
+be worse than naming it after its audio; announcing it is what keeps the
+fallback from going unnoticed, as the old unconditional behaviour did.
+
+This applies to every mode that acts on whatever project is open: the no-argument
+export, `-q` and `-t`. Passing an `.aup3` explicitly (`-c song_G.aup3`) has never
+had the problem - the stem comes from the path you gave.
+
 ## Why saving touches label mtimes
 
 After a rebuild, `rebuildap` moves the label files' mtimes up to match the newly

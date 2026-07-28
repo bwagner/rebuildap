@@ -121,6 +121,9 @@ RECENT_MENU_MARKER = '"label":"Open Recent"'
 RECENT_AUP3_LABEL_RE = rf'"label":"([^"]+\.{AUDACITY_EXTENSION})"'
 MENU_TOP_LEVEL_RE = r'"depth":1'
 
+# Prefix for one item of a list in user-facing output, one per line.
+LIST_BULLET = " - "
+
 
 class ProjectAlreadyOpenError(RuntimeError):
     """The project is already open in another Audacity window.
@@ -129,6 +132,19 @@ class ProjectAlreadyOpenError(RuntimeError):
     modal alert that blocks the command and wedges the pipe, so this is raised
     *instead of* opening. The window is left alone — it may be the user's, and
     it may hold edits the label files do not have.
+    """
+
+
+class ProjectIdentityError(RuntimeError):
+    """Which open project the commands apply to cannot be determined.
+
+    Raised by :func:`open_project_stem` when several differently-named projects
+    are open *and* the frontmost-window tiebreaker does not apply -- something
+    other than a project is in front (a modal dialog, the About box), or the
+    front window cannot be read at all. Since the stem decides which versioned
+    ``.txt`` files get written, guessing here would overwrite another project's
+    source of truth, so this refuses instead -- the same posture
+    :func:`close_owned_window` takes on an ambiguous window title.
     """
 
 
@@ -979,19 +995,110 @@ def find_recent_project_dirs(stem: str) -> List[Path]:
     return sorted(dirs)
 
 
-def _resolve_output_context(aup3_path=None):
+def _open_project_aup3_stems() -> List[str]:
+    """Stems of the ``.aup3`` files that are both **open** and **on disk**.
+
+    Intersects the only two routes Audacity offers, each useless alone:
+
+    - window titles (:func:`audacity_present.audacity_window_names`) say *which
+      projects are open* but carry no path, and an unsaved project is titled
+      with the stem of the audio it was built from -- a name with no file;
+    - Open Recent (:func:`_parse_recent_project_paths`) gives real, full paths
+      but is a recency list: it holds closed projects and can evict open ones.
+
+    Taking the intersection keeps only names that are simultaneously an open
+    window and a file that exists. Same-stem projects in different directories
+    collapse to one entry, which is right here -- the stem is the answer either
+    way, so there is nothing to be ambiguous about.
+    """
+    from . import audacity_present as ap  # deferred: audacity_present imports us
+
+    titles = set(ap.audacity_window_names())
+    if not titles:
+        return []
+    try:
+        menus = pa.do("GetInfo: Type=Menus")
+    except Exception:  # noqa: BLE001 -- a flaky pipe just means "cannot identify"
+        return []
+    return sorted(
+        {
+            p.stem
+            for p in _parse_recent_project_paths(menus)
+            if p.stem in titles and p.exists()
+        }
+    )
+
+
+def open_project_stem() -> str:
+    """The open project's identity: the stem of its ``.aup3`` file.
+
+    This is what names the versioned ``<track>_<stem>.txt`` files, so it must be
+    the *project file's* stem and not its wave track's name. The two differ
+    whenever a project was made by Save-As from another one: a transposed
+    variant ``song_G.aup3`` keeps the wave track called ``song``, and naming by
+    the track wrote the variant's labels over the original's files.
+
+    With several projects open, the **frontmost** one wins: measured on 3.7.8
+    (2026-07-28), mod-script-pipe acts on the frontmost project window, so the
+    project the commands will touch is the project whose window is in front.
+    Refuses (:class:`ProjectIdentityError`) only when that tiebreaker cannot be
+    applied -- something other than a project is frontmost (a modal dialog, the
+    About box), or the front window cannot be read at all.
+
+    Falls back to :func:`open_project_wave_stem` when no open window matches a
+    file on disk -- a never-saved project has no ``.aup3`` stem to find, and
+    blocking its export would be worse than naming it after its audio -- but
+    says so on stderr, since a silent fallback is exactly how the wave-track
+    name came to be used unnoticed.
+    """
+    from . import audacity_present as ap  # deferred: audacity_present imports us
+
+    stems = _open_project_aup3_stems()
+    if len(stems) == 1:
+        # Already unambiguous. Deliberately *not* checked against the frontmost
+        # window: a dialog in front of the only open project must not turn a
+        # working export into a refusal.
+        return stems[0]
+    if len(stems) > 1:
+        frontmost = ap.frontmost_audacity_window_name()
+        if frontmost in stems:
+            return frontmost
+        # None arrives for an Accessibility refusal as well as for "no windows"
+        # (shared -1719), so it is never an answer -- it lands here.
+        listed = "\n".join(f"{LIST_BULLET}{s}" for s in stems)
+        raise ProjectIdentityError(
+            "Several projects are open and the frontmost window is not one of "
+            f"them, so it is unclear which these commands apply to:\n{listed}\n"
+            "Bring the project you mean to the front, then run rebuildap again."
+        )
+    stem = open_project_wave_stem()
+    print(
+        f"Could not identify the open project's .aup3 file, so its label files "
+        f"will be named after its audio track ('{stem}'). This is right for a "
+        f"project that has never been saved; if it has been saved, check that "
+        f"it is still in Audacity's Open Recent menu.",
+        file=sys.stderr,
+    )
+    return stem
+
+
+def _resolve_output_context(aup3_path=None, stem=None):
     """Return (out_dir: Path, aup3_stem: str).
 
     When ``aup3_path`` is given, derive both from it. Otherwise this is the
-    no-argument workflow: write into the current directory, with the stem taken
-    from the open project's first wave track. (The caller has already decided
-    cwd is the right place — see :func:`dir_holds_project` — so no resolution
+    no-argument workflow: write into the current directory, with the open
+    project's own :func:`open_project_stem`. (The caller has already decided cwd
+    is the right place - see :func:`dir_holds_project` - so no resolution
     happens here.)
+
+    ``stem`` lets a caller that has already resolved it pass it in, so one
+    command does not identify the project twice - and, on the fallback path,
+    does not explain itself on stderr twice.
     """
     if aup3_path is not None:
         p = Path(aup3_path)
         return p.parent, p.stem
-    return Path.cwd(), open_project_wave_stem()
+    return Path.cwd(), stem or open_project_stem()
 
 
 def get_label_tracks_content_via_getinfo() -> Dict[str, str]:
@@ -1014,7 +1121,7 @@ def get_label_tracks_content_via_getinfo() -> Dict[str, str]:
 
 
 def _write_via_getinfo(
-    indices: Iterable[int], aup3_path=None
+    indices: Iterable[int], aup3_path=None, stem=None
 ) -> List[Tuple[str, Path]]:
     """Shared core: write one .txt per given label-track index.
 
@@ -1023,7 +1130,7 @@ def _write_via_getinfo(
     from the filename — which is lossy, since a track name may contain the same
     underscores ``_derive_label_filename`` uses as a separator.
     """
-    out_dir, stem = _resolve_output_context(aup3_path)
+    out_dir, stem = _resolve_output_context(aup3_path, stem)
     labels_by_idx = _parse_labels_response(pa.do("GetInfo: Type=Labels"))
     names_by_idx = _label_track_names_by_idx(
         _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
@@ -1042,22 +1149,26 @@ def _write_via_getinfo(
     return written
 
 
-def export_label_tracks_via_getinfo(aup3_path=None) -> List[Tuple[str, Path]]:
+def export_label_tracks_via_getinfo(
+    aup3_path=None, stem=None
+) -> List[Tuple[str, Path]]:
     """Export every label track, one file per track. Returns (name, path) pairs."""
-    return _write_via_getinfo(get_label_track_indices(), aup3_path)
+    return _write_via_getinfo(get_label_track_indices(), aup3_path, stem)
 
 
-def export_selected_label_tracks_via_getinfo(aup3_path=None) -> List[Tuple[str, Path]]:
+def export_selected_label_tracks_via_getinfo(
+    aup3_path=None, stem=None
+) -> List[Tuple[str, Path]]:
     """Export the selected label tracks, one file per track. Returns (name, path) pairs."""
-    return _write_via_getinfo(get_selected_label_track_indices(), aup3_path)
+    return _write_via_getinfo(get_selected_label_track_indices(), aup3_path, stem)
 
 
 def export_selected_or_all_label_tracks_via_getinfo(
-    aup3_path=None,
+    aup3_path=None, stem=None
 ) -> List[Tuple[str, Path]]:
     """Export the selected label tracks, or all when none is selected. Returns (name, path) pairs."""
     indices = get_selected_label_track_indices() or get_label_track_indices()
-    return _write_via_getinfo(indices, aup3_path)
+    return _write_via_getinfo(indices, aup3_path, stem)
 
 
 # --- transforming the selected label track in place (shared spine) ----------
@@ -1256,15 +1367,19 @@ def quantize_selected_label_track(
     reference_name: Optional[str] = None,
     verbose: bool = False,
     whole_track: bool = False,
-) -> Tuple[str, int, str, str, bool]:
+) -> Tuple[str, int, str, bool]:
     """Quantize the selected label track to a beats track, in place.
 
-    Returns ``(target_name, target_index, stem, quantized_content, changed)`` --
-    the quantized track's name, the position it was restored to, the project
-    stem, the quantized labels in canonical ``.txt`` form (for the caller to
-    write as the versioned source of truth), and whether the project was
-    actually modified. Raises :class:`QuantizeError` on any precondition failure.
-    See the module section header for the flow.
+    Returns ``(target_name, target_index, quantized_content, changed)`` --
+    the quantized track's name, the position it was restored to, the quantized
+    labels in canonical ``.txt`` form (for the caller to write as the versioned
+    source of truth), and whether the project was actually modified. Raises
+    :class:`QuantizeError` on any precondition failure. See the module section
+    header for the flow.
+
+    The project stem is deliberately *not* returned: it is the caller's business
+    (see :func:`open_project_stem`), and deriving it here from the wave track was
+    how a transposed variant came to overwrite its original's label files.
 
     **Selection scope.** With ``whole_track`` false (the default), only label
     boundaries lying inside the current Audacity time selection are snapped --
@@ -1281,7 +1396,6 @@ def quantize_selected_label_track(
     target_index, target_name, _reference_index, reference_name = (
         resolve_quantize_targets(tracks, reference_name)
     )
-    stem = open_project_wave_stem(tracks)
     contents = get_label_tracks_content_via_getinfo()
     script = locate_quantize_script()
 
@@ -1333,7 +1447,7 @@ def quantize_selected_label_track(
     changed = replace_label_track(
         target_index, target_name, quantized_content, contents[target_name]
     )
-    return target_name, target_index, stem, quantized_content, changed
+    return target_name, target_index, quantized_content, changed
 
 
 def _write_temp_label_txt(content: str) -> Path:
@@ -1470,10 +1584,10 @@ def transpose_selected_label_track(
     prefer_flats: bool = True,
     verbose: bool = False,
     whole_track: bool = False,
-) -> Tuple[str, int, str, str, bool, List[str]]:
+) -> Tuple[str, int, str, bool, List[str]]:
     """Transpose the selected label track's chords, in place.
 
-    Returns ``(target_name, target_index, stem, content, changed, skipped)`` --
+    Returns ``(target_name, target_index, content, changed, skipped)`` --
     the same shape ``-q`` returns plus the list of in-scope labels that held no
     chord. ``content`` is the canonical ``.txt`` form for the caller to write as
     the versioned source of truth; it is also exactly what was imported, so file
@@ -1488,7 +1602,6 @@ def transpose_selected_label_track(
     """
     tracks = get_tracks()
     target_index, target_name = resolve_selected_label_track(tracks)
-    stem = open_project_wave_stem(tracks)
     contents = get_label_tracks_content_via_getinfo()
     selection = resolve_selection_scope(whole_track)
 
@@ -1502,7 +1615,7 @@ def transpose_selected_label_track(
     changed = replace_label_track(
         target_index, target_name, content, contents[target_name]
     )
-    return target_name, target_index, stem, content, changed, skipped
+    return target_name, target_index, content, changed, skipped
 
 
 def _report_transposed_count(orig_labels, final_labels, skipped, selection) -> None:

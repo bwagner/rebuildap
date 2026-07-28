@@ -245,22 +245,51 @@ def _report_diff(label_file, exported_label_name, labels_from_file, labels_from_
         )
 
 
-def prerequisites_met(verbose: bool) -> bool:
+def _report_other_open_projects():
+    """Name the other projects that are open, when the frontmost one is a dead end.
+
+    The pipe acts on the *frontmost* project window, so "this project is empty"
+    is a riddle when the window in front is a scratch project and the ones the
+    user meant are sitting behind it. Silent when there is nowhere to point.
+    """
+    stems = af._open_project_aup3_stems()
+    if not stems:
+        return
+    print(
+        "Other projects are open - bring the one you mean to the front:",
+        file=sys.stderr,
+    )
+    for stem in stems:
+        print(f"{af.LIST_BULLET}{stem}", file=sys.stderr)
+
+
+def prerequisites_met() -> bool:
+    """Whether the open Audacity project can be worked with, saying why if not.
+
+    Every branch reports unconditionally rather than under ``-v``: these all end
+    with the command doing nothing, and a silent do-nothing run is
+    indistinguishable from a broken one -- the same bug `-c`'s "nothing to do"
+    and the no-arg export's silent success were both fixed for.
+    """
     if not ap.is_audacity_running():
-        if verbose:
-            print("No filename passed, Audacity not running. Quitting.")
+        print("Audacity is not running; nothing to export.", file=sys.stderr)
         return False
     if not ap.is_audacity_window_open():
-        if verbose:
-            print("No Audacity window open. Quitting.")
+        print("No Audacity window is open; nothing to export.", file=sys.stderr)
         return False
     if af.is_project_empty():
-        if verbose:
-            print("Audacity project empty. Quitting.")
+        print(
+            "The frontmost Audacity project is empty; nothing to export.",
+            file=sys.stderr,
+        )
+        _report_other_open_projects()
         return False
     if not af.get_label_tracks():
-        if verbose:
-            print("Audacity project has no label tracks. Quitting.")
+        print(
+            "The frontmost Audacity project has no label tracks; nothing to export.",
+            file=sys.stderr,
+        )
+        _report_other_open_projects()
         return False
 
     return True
@@ -366,8 +395,22 @@ def rebuild(
                     "unsaved project would raise a 'Save changes?' dialog."
                 )
 
-    elif prerequisites_met(verbose):
+    elif prerequisites_met():
         _export_open_project_labels(verbose, force)
+
+
+def _open_project_stem_or_exit():
+    """The open project's ``.aup3`` stem, or a clean exit when it is ambiguous.
+
+    Shared by every mode that acts on whatever project is open (the no-arg
+    export, ``-q``, ``-t``) -- all three name their versioned ``.txt`` files
+    after it, so all three must refuse identically rather than write one
+    project's labels into another's files.
+    """
+    try:
+        return af.open_project_stem()
+    except af.ProjectIdentityError as e:
+        raise SystemExit(f"{e}") from e
 
 
 def _resolve_export_dir(stem, force=False):
@@ -427,18 +470,18 @@ def _export_open_project_labels(verbose, force=False):
     the source-of-truth files. The cwd/project-dir decision (and ``-f``) lives
     in :func:`_resolve_export_dir`; a ``None`` result means refuse.
     """
-    stem = af.open_project_wave_stem()
+    stem = _open_project_stem_or_exit()
     if _resolve_export_dir(stem, force) is None:
         return
 
     if af.get_selected_label_track_indices():
         if verbose:
             print("exporting selected label track")
-        exported = af.export_selected_label_tracks_via_getinfo()
+        exported = af.export_selected_label_tracks_via_getinfo(stem=stem)
     else:
         if verbose:
             print("exporting all label tracks")
-        exported = af.export_label_tracks_via_getinfo()
+        exported = af.export_label_tracks_via_getinfo(stem=stem)
     # Reported unconditionally, not only under -v: a silent export looked
     # like nothing happened. Names each track and the full path written.
     _report_exports(exported)
@@ -499,14 +542,14 @@ def _quantize_open_project(quantize, verbose, force=False):
     unpersisted half-state.
     """
     reference_name = None if quantize is _QUANTIZE_AUTODETECT else quantize
-    if not prerequisites_met(verbose):
+    if not prerequisites_met():
         return
-    stem = af.open_project_wave_stem()
+    stem = _open_project_stem_or_exit()
     out_dir = _resolve_project_dir(stem, "-q")
     if out_dir is None:
         return
     try:
-        target_name, _idx, _stem, content, changed = af.quantize_selected_label_track(
+        target_name, _idx, content, changed = af.quantize_selected_label_track(
             reference_name, verbose, whole_track=force
         )
     except af.SelectionReadError as e:
@@ -571,14 +614,14 @@ def _transpose_open_project(semitones, sharps, verbose, force=False):
 
     ``sharps`` (``-s``) opts out of the flat spelling ``-t`` defaults to.
     """
-    if not prerequisites_met(verbose):
+    if not prerequisites_met():
         return
-    stem = af.open_project_wave_stem()
+    stem = _open_project_stem_or_exit()
     out_dir = _resolve_project_dir(stem, f"-t {semitones}")
     if out_dir is None:
         return
     try:
-        target_name, _idx, _stem, content, changed, skipped = (
+        target_name, _idx, content, changed, skipped = (
             af.transpose_selected_label_track(
                 semitones, prefer_flats=not sharps, verbose=verbose, whole_track=force
             )

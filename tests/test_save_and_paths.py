@@ -9,6 +9,7 @@ import os
 import pytest
 
 from rebuildap import audacity_funcs as af
+from rebuildap import audacity_present as ap
 
 
 @pytest.fixture
@@ -542,8 +543,8 @@ def _stub_open_project(monkeypatch, stem, selected):
     reports `stem` with `selected` label-track indices."""
     import rebuildap
 
-    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda _v: True)
-    monkeypatch.setattr(af, "open_project_wave_stem", lambda: stem)
+    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(af, "open_project_stem", lambda: stem)
     monkeypatch.setattr(af, "get_selected_label_track_indices", lambda: selected)
 
 
@@ -610,15 +611,221 @@ def test_find_recent_project_dirs_no_stem_match(tmp_path, monkeypatch):
     assert af.find_recent_project_dirs("song") == []
 
 
+# --- open_project_stem (the open project's identity) ----------------------
+#
+# The stem that names the versioned .txt files is the open project's *.aup3*
+# stem, not its wave track's name. The two differ whenever a project was made by
+# Save-As from another one -- a transposed variant `<stem>_G.aup3` keeps the
+# original's wave track name, so naming by the wave track wrote the variant's
+# labels over the original's files.
+
+_UNSET = object()  # "the test did not say", distinct from an explicit None
+
+
+def _stub_identity(
+    monkeypatch, titles, recent_paths, wave_stem="song", frontmost=_UNSET
+):
+    """Fake the routes open_project_stem uses: the two it intersects, the
+    frontmost-window tiebreaker, and the wave-stem fallback.
+
+    ``frontmost`` defaults to the first title, since the common case is one
+    project window that is also the front one."""
+    monkeypatch.setattr(ap, "audacity_window_names", lambda: list(titles))
+    monkeypatch.setattr(af.pa, "do", lambda cmd: _menus_with(recent_paths))
+    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: wave_stem)
+    if frontmost is _UNSET:
+        frontmost = titles[0] if titles else None
+    monkeypatch.setattr(ap, "frontmost_audacity_window_name", lambda: frontmost)
+
+
+def _make_project(tmp_path, name, subdir="a"):
+    proj = tmp_path / subdir / f"{name}.aup3"
+    proj.parent.mkdir(parents=True, exist_ok=True)
+    proj.write_bytes(b"x")
+    return proj
+
+
+def test_open_project_stem_uses_the_open_windows_aup3_stem(tmp_path, monkeypatch):
+    proj = _make_project(tmp_path, "song")
+    _stub_identity(monkeypatch, ["song"], [str(proj)])
+    assert af.open_project_stem() == "song"
+
+
+def test_open_project_stem_prefers_aup3_stem_over_wave_track_name(
+    tmp_path, monkeypatch
+):
+    """The regression this whole change is about: a `_G` variant must not be
+    named after the wave track it inherited from the project it was copied from."""
+    variant = _make_project(tmp_path, "song_G")
+    _stub_identity(monkeypatch, ["song_G"], [str(variant)], wave_stem="song")
+    assert af.open_project_stem() == "song_G"
+
+
+def _two_projects(tmp_path):
+    return _make_project(tmp_path, "song"), _make_project(tmp_path, "song_G")
+
+
+@pytest.mark.parametrize("front", ["song", "song_G"])
+def test_open_project_stem_follows_the_frontmost_window(tmp_path, monkeypatch, front):
+    """Measured on 3.7.8 (2026-07-28): mod-script-pipe acts on the frontmost
+    project window, so with several open the front one *is* the answer."""
+    original, variant = _two_projects(tmp_path)
+    _stub_identity(
+        monkeypatch,
+        ["song", "song_G"],
+        [str(original), str(variant)],
+        frontmost=front,
+    )
+    assert af.open_project_stem() == front
+
+
+def test_open_project_stem_refuses_when_the_frontmost_window_is_not_a_project(
+    tmp_path, monkeypatch
+):
+    """A modal dialog or About box can hold front position; its title is not a
+    project, so there is nothing to break the tie with."""
+    original, variant = _two_projects(tmp_path)
+    _stub_identity(
+        monkeypatch,
+        ["song", "song_G"],
+        [str(original), str(variant)],
+        frontmost="About Audacity",
+    )
+    with pytest.raises(af.ProjectIdentityError) as excinfo:
+        af.open_project_stem()
+    lines = str(excinfo.value).splitlines()
+    # Each candidate on its own line: a comma-joined run of long project stems is
+    # unreadable, and these are exactly the names the user has to tell apart.
+    assert f"{af.LIST_BULLET}song" in lines
+    assert f"{af.LIST_BULLET}song_G" in lines
+
+
+def test_open_project_stem_refuses_when_the_frontmost_window_is_unknown(
+    tmp_path, monkeypatch
+):
+    """frontmost_audacity_window_name() returns None for an Accessibility refusal
+    as well as for "no windows", so None must never be read as an answer."""
+    original, variant = _two_projects(tmp_path)
+    _stub_identity(
+        monkeypatch, ["song", "song_G"], [str(original), str(variant)], frontmost=None
+    )
+    with pytest.raises(af.ProjectIdentityError):
+        af.open_project_stem()
+
+
+def test_open_project_stem_does_not_need_the_frontmost_window_when_unambiguous(
+    tmp_path, monkeypatch
+):
+    """One candidate is already the answer -- a dialog sitting in front of the
+    only open project must not turn a working export into a refusal."""
+    proj = _make_project(tmp_path, "song_G")
+    _stub_identity(
+        monkeypatch, ["song_G"], [str(proj)], frontmost="Preferences: Devices"
+    )
+    assert af.open_project_stem() == "song_G"
+
+
+def test_open_project_stem_same_stem_in_two_dirs_is_not_ambiguous(
+    tmp_path, monkeypatch
+):
+    """Two same-stem projects give one answer, so there is nothing to refuse --
+    only *differing* stems are ambiguous."""
+    a = _make_project(tmp_path, "song", subdir="a")
+    b = _make_project(tmp_path, "song", subdir="b")
+    _stub_identity(monkeypatch, ["song"], [str(a), str(b)])
+    assert af.open_project_stem() == "song"
+
+
+def test_open_project_stem_ignores_recent_projects_that_are_not_open(
+    tmp_path, monkeypatch
+):
+    open_one = _make_project(tmp_path, "song_G")
+    closed = _make_project(tmp_path, "other", subdir="b")
+    _stub_identity(monkeypatch, ["song_G"], [str(closed), str(open_one)])
+    assert af.open_project_stem() == "song_G"
+
+
+def test_open_project_stem_skips_recent_entries_gone_from_disk(tmp_path, monkeypatch):
+    ghost = tmp_path / "gone" / "song_G.aup3"  # never created
+    _stub_identity(monkeypatch, ["song_G"], [str(ghost)], wave_stem="song")
+    assert af.open_project_stem() == "song"
+
+
+def test_open_project_stem_falls_back_to_wave_stem_and_says_so(
+    tmp_path, monkeypatch, capsys
+):
+    """An unsaved project has no .aup3 stem to find; keep exporting rather than
+    blocking, but never do it silently -- the announced name is the whole point."""
+    _stub_identity(monkeypatch, ["song"], [], wave_stem="song")
+    assert af.open_project_stem() == "song"
+    err = capsys.readouterr().err
+    assert "song" in err
+
+
+def test_open_project_stem_falls_back_when_the_menu_query_fails(monkeypatch, capsys):
+    def boom(cmd):
+        raise RuntimeError("pipe went away")
+
+    monkeypatch.setattr(ap, "audacity_window_names", lambda: ["song"])
+    monkeypatch.setattr(af.pa, "do", boom)
+    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: "song")
+    assert af.open_project_stem() == "song"
+    assert capsys.readouterr().err
+
+
+def test_open_project_stem_falls_back_when_windows_cannot_be_listed(
+    tmp_path, monkeypatch
+):
+    """audacity_window_names() returns [] for an Accessibility refusal as well as
+    for "no windows", so an empty title list must not resolve to anything."""
+    proj = _make_project(tmp_path, "song_G")
+    _stub_identity(monkeypatch, [], [str(proj)], wave_stem="song")
+    assert af.open_project_stem() == "song"
+
+
 # --- _resolve_output_context stays cwd-only for the no-arg case ------------
 
 
-def test_resolve_output_context_is_cwd_plus_wave_stem(tmp_path, monkeypatch):
+def test_resolve_output_context_is_cwd_plus_the_projects_aup3_stem(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(af, "open_project_wave_stem", lambda: "song")
+    monkeypatch.setattr(af, "open_project_stem", lambda: "song")
     out_dir, stem = af._resolve_output_context(None)
     assert out_dir == tmp_path
     assert stem == "song"
+
+
+def test_resolve_output_context_takes_an_already_resolved_stem(tmp_path, monkeypatch):
+    """One command must not identify the project twice -- the caller resolved it,
+    so nothing here may go asking again."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        af, "open_project_stem", lambda: pytest.fail("must not re-resolve")
+    )
+    assert af._resolve_output_context(None, "song_G") == (tmp_path, "song_G")
+
+
+def test_exported_filenames_carry_the_aup3_stem_not_the_wave_track_name(
+    tmp_path, monkeypatch
+):
+    """End to end over the naming path: the `_G` variant writes
+    `chords_song_G.txt`, not over the original's `chords_song.txt`."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(af, "open_project_stem", lambda: "song_G")
+    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: "song")
+    labels = '\n[ [1, [[1.35, 2.83, "C7"]]] ]\nBatchCommand finished: OK\n'
+    tracks = (
+        '\n[ { "name":"song", "kind":"wave" },\n'
+        '  { "name":"chords", "kind":"label" } ]\nBatchCommand finished: OK\n'
+    )
+    monkeypatch.setattr(af, "get_label_track_indices", lambda: [1])
+    monkeypatch.setattr(af.pa, "do", lambda cmd: labels if "Labels" in cmd else tracks)
+
+    written = af.export_label_tracks_via_getinfo()
+
+    assert [p.name for _n, p in written] == ["chords_song_G.txt"]
+    assert not (tmp_path / "chords_song.txt").exists()
 
 
 # --- no-arg CLI behaviour --------------------------------------------------
@@ -637,7 +844,7 @@ def test_no_arg_exports_and_reports_when_cwd_is_the_project(
     monkeypatch.setattr(
         af,
         "export_selected_label_tracks_via_getinfo",
-        lambda: [("chords", tmp_path / "chords_song.txt")],
+        lambda **k: [("chords", tmp_path / "chords_song.txt")],
     )
 
     rebuildap.rebuild(verbose=False)
@@ -659,7 +866,7 @@ def test_no_arg_all_tracks_lists_every_track_when_cwd_is_the_project(
     monkeypatch.setattr(
         af,
         "export_label_tracks_via_getinfo",
-        lambda: [
+        lambda **k: [
             ("parts", tmp_path / "parts_song.txt"),
             ("chords", tmp_path / "chords_song.txt"),
         ],
@@ -732,7 +939,8 @@ def test_no_arg_force_exports_to_cwd_despite_candidates(tmp_path, monkeypatch, c
     monkeypatch.setattr(
         af,
         "export_selected_label_tracks_via_getinfo",
-        lambda: exported.append("ran") or [("chords", tmp_path / "chords_song.txt")],
+        lambda **k: exported.append("ran")
+        or [("chords", tmp_path / "chords_song.txt")],
     )
 
     rebuildap.rebuild(verbose=False, force=True)
@@ -847,7 +1055,8 @@ def test_no_arg_exports_to_cwd_with_notice_when_no_candidates(
     monkeypatch.setattr(
         af,
         "export_selected_label_tracks_via_getinfo",
-        lambda: exported.append("ran") or [("chords", tmp_path / "chords_song.txt")],
+        lambda **k: exported.append("ran")
+        or [("chords", tmp_path / "chords_song.txt")],
     )
 
     rebuildap.rebuild(verbose=False)
@@ -877,11 +1086,72 @@ def test_prerequisites_not_met_when_audacity_not_running(monkeypatch):
     import rebuildap
 
     _all_prerequisites(monkeypatch, running=False)
-    assert rebuildap.prerequisites_met(verbose=False) is False
+    assert rebuildap.prerequisites_met() is False
 
 
 def test_prerequisites_met_when_everything_present(monkeypatch):
     import rebuildap
 
     _all_prerequisites(monkeypatch, running=True)
-    assert rebuildap.prerequisites_met(verbose=False) is True
+    assert rebuildap.prerequisites_met() is True
+
+
+# Every one of these used to be gated behind -v, so the whole command returned
+# silently and looked broken -- the third time this project has hit that bug
+# (see -c's "nothing to do", and the no-arg export's silent success).
+
+
+@pytest.mark.parametrize(
+    "failing, expected",
+    [
+        ("is_audacity_running", "not running"),
+        ("is_audacity_window_open", "No Audacity window"),
+        ("is_project_empty", "empty"),
+        ("get_label_tracks", "no label tracks"),
+    ],
+)
+def test_every_unmet_prerequisite_says_so_without_verbose(
+    monkeypatch, capsys, failing, expected
+):
+    import rebuildap
+    from rebuildap import audacity_present as ap
+
+    _all_prerequisites(monkeypatch, running=True)
+    monkeypatch.setattr(af, "_open_project_aup3_stems", lambda: [])
+    # is_project_empty is the one guard that fails by returning True.
+    target = ap if failing.startswith("is_audacity") else af
+    monkeypatch.setattr(target, failing, lambda: failing == "is_project_empty")
+
+    assert rebuildap.prerequisites_met() is False
+    assert expected in capsys.readouterr().err
+
+
+def test_an_empty_frontmost_project_points_at_the_other_open_projects(
+    monkeypatch, capsys
+):
+    """The case that surfaced this: two real projects open behind a scratch empty
+    one. Saying "project empty" without naming what it looked at is a riddle."""
+    import rebuildap
+
+    _all_prerequisites(monkeypatch, running=True)
+    monkeypatch.setattr(af, "is_project_empty", lambda: True)
+    monkeypatch.setattr(af, "_open_project_aup3_stems", lambda: ["song", "song_G"])
+
+    assert rebuildap.prerequisites_met() is False
+
+    err = capsys.readouterr().err
+    assert "frontmost" in err
+    assert f"{af.LIST_BULLET}song" in err.splitlines()
+    assert f"{af.LIST_BULLET}song_G" in err.splitlines()
+
+
+def test_no_other_projects_means_no_pointless_hint(monkeypatch, capsys):
+    """One empty window and nothing else open -- there is nowhere to point."""
+    import rebuildap
+
+    _all_prerequisites(monkeypatch, running=True)
+    monkeypatch.setattr(af, "is_project_empty", lambda: True)
+    monkeypatch.setattr(af, "_open_project_aup3_stems", lambda: [])
+
+    assert rebuildap.prerequisites_met() is False
+    assert "bring the one you mean" not in capsys.readouterr().err.lower()

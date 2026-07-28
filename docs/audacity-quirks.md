@@ -240,6 +240,24 @@ saved-as states, since several of the workarounds above rest on it:
   auto-writing to one (which the same-stem ambiguity could get wrong). (Strict
   `json.loads` on the whole menu payload fails — some label carries an invalid
   escape — so the Open Recent section is scraped by a scoped regex.)
+- **Intersected with the window titles, it does yield the open project's file
+  name** - which is weaker than per-window identity but enough to *name* things.
+  A title says a project is open but carries no path; Open Recent gives a path
+  but not whether that project is still open. A stem that appears in both is a
+  project that is open and exists on disk, and that is what `open_project_stem`
+  returns to name the versioned `.txt` files (see
+  [label-export.md](label-export.md#which-project-the-exported-files-are-named-after)).
+- **The pipe acts on the frontmost project window** (measured 2026-07-28, 3.7.8),
+  which supplies the last missing piece: titles say what is open, Open Recent
+  says where those files are, and the frontmost window says which of them a
+  command will touch. Two projects open with a uniquely named label track in
+  each; `GetInfo: Type=Tracks` reported `chords_A` with the first in front and
+  `chords_B` with the second, so it is genuinely the front window and not the
+  first-opened or a fixed internal pointer. Focus was moved between the reads
+  with AXRaise, so a plain window raise retargets the pipe - no click needed.
+  `open_project_stem` uses this to break the several-projects tie, and refuses
+  only when a non-project window (a dialog) is frontmost or the front window
+  cannot be read.
 - Saving retitles the window to the new stem.
 - **An *unsaved* project built by importing audio is also titled with that
   audio's stem** — not `Audacity`. Observed 2026-07-18 running `rebuildap -n

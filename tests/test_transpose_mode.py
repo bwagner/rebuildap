@@ -172,9 +172,9 @@ def test_transpose_swaps_the_track_via_the_shared_spine(monkeypatch):
     current = af._format_track_txt([(0.0, 1.0, "Am")])
     events = _orchestrator(monkeypatch, current)
 
-    name, index, stem, content, changed, skipped = af.transpose_selected_label_track(2)
+    name, index, content, changed, skipped = af.transpose_selected_label_track(2)
 
-    assert (name, index, stem, changed) == ("chords", 1, "song", True)
+    assert (name, index, changed) == ("chords", 1, True)
     assert content == af._format_track_txt([(0.0, 1.0, "Bm")])
     assert skipped == []
     assert events == ["remove", "import:chords", "move:2->1", "select:[1]"]
@@ -183,13 +183,13 @@ def test_transpose_swaps_the_track_via_the_shared_spine(monkeypatch):
 def test_the_orchestrator_defaults_to_flats(monkeypatch):
     """A -> Bb, not A#. Uses a chord whose two spellings differ, unlike Am -> Bm."""
     _orchestrator(monkeypatch, af._format_track_txt([(0.0, 1.0, "A")]))
-    _, _, _, content, _, _ = af.transpose_selected_label_track(1)
+    _, _, content, _, _ = af.transpose_selected_label_track(1)
     assert content == af._format_track_txt([(0.0, 1.0, "Bb")])
 
 
 def test_the_orchestrator_honours_sharps(monkeypatch):
     _orchestrator(monkeypatch, af._format_track_txt([(0.0, 1.0, "A")]))
-    _, _, _, content, _, _ = af.transpose_selected_label_track(1, prefer_flats=False)
+    _, _, content, _, _ = af.transpose_selected_label_track(1, prefer_flats=False)
     assert content == af._format_track_txt([(0.0, 1.0, "A#")])
 
 
@@ -197,7 +197,7 @@ def test_no_chords_leaves_the_project_untouched(monkeypatch):
     current = af._format_track_txt([(0.0, 1.0, "Guitar Solo")])
     events = _orchestrator(monkeypatch, current)
 
-    _, _, _, content, changed, skipped = af.transpose_selected_label_track(2)
+    _, _, content, changed, skipped = af.transpose_selected_label_track(2)
 
     assert changed is False
     assert events == [], "a track with no chords must not touch the project"
@@ -210,7 +210,7 @@ def test_transposing_to_the_same_spelling_skips_the_swap(monkeypatch):
     current = af._format_track_txt([(0.0, 1.0, "Bb")])
     events = _orchestrator(monkeypatch, current)
 
-    _, _, _, _, changed, _ = af.transpose_selected_label_track(0)
+    _, _, _, changed, _ = af.transpose_selected_label_track(0)
 
     assert changed is False
     assert events == []
@@ -224,7 +224,7 @@ def test_force_whole_track_skips_the_selection_read(monkeypatch):
         raise AssertionError("read_time_selection must not be called with -f")
 
     monkeypatch.setattr(af, "read_time_selection", fail)
-    _, _, _, content, _, _ = af.transpose_selected_label_track(2, whole_track=True)
+    _, _, content, _, _ = af.transpose_selected_label_track(2, whole_track=True)
     assert content == af._format_track_txt([(0.0, 1.0, "Bm")])
 
 
@@ -329,8 +329,8 @@ def _stub_transpose(
     """Fake the live layer for _transpose_open_project, recording the arguments it
     was called with so the CLI-to-orchestrator wiring can be asserted."""
     calls = []
-    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda _v: True)
-    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: stem)
+    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: stem)
 
     def fake(semitones, prefer_flats=True, verbose=False, whole_track=False):
         calls.append(
@@ -340,7 +340,7 @@ def _stub_transpose(
                 "whole_track": whole_track,
             }
         )
-        return (name, 1, stem, content, changed, list(skipped))
+        return (name, 1, content, changed, list(skipped))
 
     monkeypatch.setattr(af, "transpose_selected_label_track", fake)
     return calls
@@ -396,11 +396,30 @@ def test_transpose_refuses_before_mutating_when_project_dir_unknown(
     assert "Open Recent" in capsys.readouterr().err
 
 
+def test_transpose_refuses_before_mutating_when_the_project_is_ambiguous(
+    monkeypatch, tmp_path
+):
+    """Same refusal as -q: naming the .txt after the wrong open project would
+    transpose one project's chords into another project's source of truth."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    calls = _stub_transpose(monkeypatch)
+
+    def ambiguous():
+        raise af.ProjectIdentityError("Several projects are open: song, song_G.")
+
+    monkeypatch.setattr(af, "open_project_stem", ambiguous)
+
+    with pytest.raises(SystemExit, match="song_G"):
+        rebuildap.rebuild(transpose=2)
+    assert calls == [], "must not transpose when the target project is unknown"
+
+
 def test_selection_read_failure_exits_pointing_at_force(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "song.aup3").write_text("")
-    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda _v: True)
-    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: "song")
+    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: "song")
 
     def boom(*a, **k):
         raise af.SelectionReadError("no accessor")

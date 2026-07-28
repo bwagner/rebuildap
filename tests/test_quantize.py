@@ -210,11 +210,11 @@ def test_quantize_swaps_track_in_the_safe_order(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(af, "select_tracks", lambda idx: events.append(f"select:{idx}"))
 
-    target_name, target_index, stem, content, changed = (
-        af.quantize_selected_label_track(reference_name=None)
+    target_name, target_index, content, changed = af.quantize_selected_label_track(
+        reference_name=None
     )
 
-    assert (target_name, target_index, stem, changed) == ("chords", 1, "song", True)
+    assert (target_name, target_index, changed) == ("chords", 1, True)
     # The quantized content is handed back canonicalized (6-decimal), from the
     # same bytes that were imported -- no read-back export from Audacity.
     assert content == af._format_track_txt([(0.0, 0.0, "a")])
@@ -256,7 +256,7 @@ def test_quantize_skips_the_swap_when_already_quantized(monkeypatch, tmp_path):
     monkeypatch.setattr(af, "move_track_to", lambda *a: events.append("move"))
     monkeypatch.setattr(af, "select_tracks", lambda *a: events.append("select"))
 
-    _, _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
+    _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
 
     assert changed is False
     assert events == [], "already-quantized track must not touch the project"
@@ -395,7 +395,7 @@ def test_only_boundaries_inside_the_selection_are_snapped(monkeypatch, tmp_path)
     # Selection [4.0, 7.0]: only 'b' is inside -> only its boundaries move.
     monkeypatch.setattr(af, "read_time_selection", lambda: (4.0, 7.0))
 
-    _, _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
+    _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
 
     assert changed is True
     assert content == af._format_track_txt([(1.0, 2.0, "a"), (5.1, 6.1, "b")])
@@ -407,7 +407,7 @@ def test_no_region_quantizes_the_whole_track(monkeypatch, tmp_path):
     _orchestrator_with_quantized(monkeypatch, tmp_path, current, quantized)
     monkeypatch.setattr(af, "read_time_selection", lambda: (3.0, 3.0))  # cursor only
 
-    _, _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
+    _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
 
     assert content == af._format_track_txt([(1.1, 2.1, "a"), (5.1, 6.1, "b")])
 
@@ -421,7 +421,7 @@ def test_force_whole_track_skips_the_selection_read(monkeypatch, tmp_path):
 
     monkeypatch.setattr(af, "read_time_selection", boom)
 
-    _, _, _, content, _ = af.quantize_selected_label_track(
+    _, _, content, _ = af.quantize_selected_label_track(
         reference_name="beats", whole_track=True
     )
     assert content == af._format_track_txt([(1.1, 2.1, "a")])
@@ -470,7 +470,7 @@ def test_quantized_content_is_canonical_six_decimal(monkeypatch, tmp_path):
     monkeypatch.setattr(af, "move_track_to", lambda *a: None)
     monkeypatch.setattr(af, "select_tracks", lambda *a: None)
 
-    _, _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
+    _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
     assert content == "0.000000\t1.000000\tverse\n"
 
 
@@ -590,12 +590,12 @@ def _stub_quantize(
     import rebuildap as rb
 
     calls = []
-    monkeypatch.setattr(rb, "prerequisites_met", lambda _v: True)
-    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: stem)
+    monkeypatch.setattr(rb, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: stem)
 
     def fake_quantize(ref, verbose, whole_track=False):
         calls.append(f"quantized:whole={whole_track}")
-        return (name, 1, stem, content, changed)
+        return (name, 1, content, changed)
 
     monkeypatch.setattr(af, "quantize_selected_label_track", fake_quantize)
     return calls
@@ -658,6 +658,28 @@ def test_quantize_refuses_before_mutating_when_project_dir_unknown(
     assert "Could not locate" in capsys.readouterr().err
 
 
+def test_quantize_refuses_before_mutating_when_the_project_is_ambiguous(
+    monkeypatch, tmp_path
+):
+    """Two projects open -> no way to know whose .txt this is; refuse rather than
+    quantize into the wrong project's source of truth."""
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    calls = _stub_quantize(monkeypatch, stem="song", name="chords")
+
+    def ambiguous():
+        raise af.ProjectIdentityError("Several projects are open: song, song_G.")
+
+    monkeypatch.setattr(af, "open_project_stem", ambiguous)
+
+    with pytest.raises(SystemExit) as excinfo:
+        rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+    assert "song_G" in str(excinfo.value)
+    assert calls == [], "must not quantize when the target project is unknown"
+
+
 def test_quantize_does_not_rewrite_an_already_current_file(
     monkeypatch, tmp_path, capsys
 ):
@@ -716,8 +738,8 @@ def test_selection_read_failure_exits_pointing_at_force(monkeypatch, tmp_path):
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "song.aup3").write_text("")
-    monkeypatch.setattr(rb, "prerequisites_met", lambda _v: True)
-    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: "song")
+    monkeypatch.setattr(rb, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: "song")
 
     def boom(ref, verbose, whole_track=False):
         raise af.SelectionReadError("Nyquist did not report the selection")
