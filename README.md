@@ -280,6 +280,17 @@ uv tool install --reinstall .
 This builds and installs `rebuildap` as a globally available tool. Omit
 `--reinstall` for the first install.
 
+### Optional: a keyboard shortcut
+
+`quantize` and `transpose` act on the selected label track of the project you are
+looking at, so they can be driven from a global hotkey instead of a terminal — the
+scripting pipe targets the frontmost project window, which is the one in front of
+you. The Hammerspoon side ships with the repo as
+`contrib/hammerspoon/rebuildap.lua`; [setting it up](docs/hotkeys.md) is two lines
+in your Hammerspoon config.
+Entirely optional, and not every command suits it: a no-argument `export` writes
+into the current directory, which a hotkey does not meaningfully have.
+
 ## Keeping .aup3 files out of git
 
 Add these to your project's `.gitignore`:
@@ -318,6 +329,9 @@ change something and wondering why it's written that way:
   tell you.
 - [Exporting label tracks](docs/label-export.md) — the two available export
   paths, their precision difference, and why the interactive one was retired.
+- [Running rebuildap from a keyboard shortcut](docs/hotkeys.md) — optional; which
+  commands suit a hotkey and which don't, and the two environment traps that make
+  a GUI-launched run behave differently from a terminal one.
 - [Roadmap](docs/roadmap.md) — what's still missing.
 
 ## Contribute
