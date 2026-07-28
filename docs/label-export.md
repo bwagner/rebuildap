@@ -57,17 +57,17 @@ never-saved project has no `.aup3` stem to find, and refusing to export it would
 be worse than naming it after its audio; announcing it is what keeps the
 fallback from going unnoticed, as the old unconditional behaviour did.
 
-This applies to every mode that acts on whatever project is open: the no-argument
-export, `-q` and `-t`. Passing an `.aup3` explicitly (`-c song_G.aup3`) has never
-had the problem - the stem comes from the path you gave.
+This applies to every command that acts on whatever project is open: a bare
+`export`, `quantize` and `transpose`. Passing an `.aup3` explicitly (`check
+song_G.aup3`) has never had the problem - the stem comes from the path you gave.
 
 ## Why saving touches label mtimes
 
 After a rebuild, `rebuildap` moves the label files' mtimes up to match the newly
 saved `.aup3` (forward only, never backwards, and their *content* is untouched).
 
-Without that, `-c` would treat every label file as older than the project and so
-re-export and diff it on every run, forever. Check mode only rewrites a label
+Without that, `check` would treat every label file as older than the project and
+so re-export and diff it on every run, forever. It only rewrites a label
 file when the content actually diverges, so the condition would never clear on
 its own. The rebuild is proof that the project and the label files agree — it was
 built from those very files — so recording that agreement in the mtimes is
@@ -75,7 +75,7 @@ accurate rather than a fudge.
 
 ## What the mtime gate decides — and what it doesn't
 
-The same mtimes drive `-c`, in the other direction. An Audacity edit always bumps
+The same mtimes drive `check`, in the other direction. An Audacity edit always bumps
 the `.aup3` to newest (see
 [When an .aup3 changes on disk](audacity-quirks.md#when-an-aup3-changes-on-disk)),
 so if *every* label file is newer than the project, no edit can have outrun them
@@ -98,23 +98,25 @@ only the older ones, which was close to free to change and quietly wrong:
 - Comparing one more file costs about **0.2 ms** (measured over 654 real label
   files), against 2-3 s for the open it cannot avoid. The per-file filter saved
   nothing measurable.
-- It hid tracks. `-q` and `-t` rewrite a label file *after* reading the project,
-  so the file they just wrote is newer than the `.aup3` — and a `-c` run would
+- It hid tracks. `quantize` and `transpose` rewrite a label file *after* reading
+  the project, so the file they just wrote is newer than the `.aup3` — and a
+  `check` run would
   list three tracks while silently omitting the fourth, indistinguishable from a
   project that only has three.
 
-`-c -f` skips the gate: open and compare even when every label file is newer.
+`check -f` skips the gate: open and compare even when every label file is newer.
 That is for when mtimes lie across the board — a `git checkout`, a `touch`, a
 restore — leaving files newer than the project while their content has diverged.
 
 Comparing a newer file cannot damage it. A divergence writes the *export
 artifact* `<track>.txt`, never the versioned `<track>_<stem>.txt`, so a `.txt`
-that `-q` or `-t` just wrote is never overwritten by a check.
+that `quantize` or `transpose` just wrote is never overwritten by a check.
 
-(`-c -f` was spelled `-c -d` until 2026-07-25. It became `-f` to join the other
-modes' "ignore the narrowing rule, do the whole thing" flag — the same `-f` that
-exports into the current directory anyway, or acts on the whole track rather than
-the time selection.)
+(`check -f` was spelled `-c -d` until 2026-07-25, and `-c -f` until the commands
+replaced the mode flags. It became `-f` to join the other commands' "ignore the
+narrowing rule, do the whole thing" flag — the same `-f` that exports into the
+current directory anyway, or acts on the whole track rather than the time
+selection.)
 
 ## Two ways to export label tracks
 

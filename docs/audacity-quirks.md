@@ -12,7 +12,7 @@ Back to the [README](../README.md).
 
 ## Audacity cold-start race
 
-Running `rebuildap -c` across many projects uncovered an Audacity crash when
+Running `rebuildap check` across many projects uncovered an Audacity crash when
 commands reached a freshly-started instance too quickly. Crash signature:
 
 - `EXC_BAD_ACCESS / KERN_INVALID_ADDRESS` at address `0x220` (near-null pointer deref)
@@ -148,7 +148,7 @@ Two details make this safe rather than presumptuous:
 
 - **Opening does not modify the file.** The dialog says "*Once saved*, the
   project can only be opened with Audacity version 3.7 or newer" — the
-  conversion happens on save, and `-c` never saves. Verified by md5: a project
+  conversion happens on save, and `check` never saves. Verified by md5: a project
   file was byte-identical after being opened with the dialog dismissed.
 - **The watcher only ever touches that one dialog**, matched on its static text.
   Several modal dialogs can be stacked at once (an `Error Opening Project`
@@ -233,7 +233,7 @@ saved-as states, since several of the workarounds above rest on it:
   window holds"), so it does not close the gap above: same-stem projects in
   different dirs still collide, and a project evicted from the list vanishes.
   It is enough, though, to *suggest* where the open project lives for the
-  no-argument export — see `find_recent_project_dirs`, which returns the recent
+  argument-less `export` — see `find_recent_project_dirs`, which returns the recent
   ``.aup3`` dirs whose stem matches and that still exist on disk. That list is
   advisory only: the export always writes into cwd, and when cwd is not the
   project's own directory it prints these candidates and refuses rather than
@@ -260,8 +260,8 @@ saved-as states, since several of the workarounds above rest on it:
   cannot be read.
 - Saving retitles the window to the new stem.
 - **An *unsaved* project built by importing audio is also titled with that
-  audio's stem** — not `Audacity`. Observed 2026-07-18 running `rebuildap -n
-  song.opus`: the window came up as `song` despite never being saved. (Only an
+  audio's stem** — not `Audacity`. Observed 2026-07-18 running `rebuildap build
+  -n song.opus`: the window came up as `song` despite never being saved. (Only an
   *empty* project window is titled `Audacity`.) So "title == stem" does **not**
   imply "a saved project on disk at that path". Both current users of that
   inference degrade safely — `project_window_open` would refuse a check as

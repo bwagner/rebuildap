@@ -19,10 +19,6 @@ rebuildap.py song.mp3
 # Indent for a path printed on its own line, so long paths stay readable.
 _PATH_INDENT = "  "
 
-# Sentinel for a bare ``-q`` (no track named): auto-detect the beats reference
-# track. Distinct from ``-q <name>`` (the string) and no ``-q`` at all (None).
-_QUANTIZE_AUTODETECT = object()
-
 
 def process_lines(lines):
     """Normalize label lines to the shared canonical form for comparison.
@@ -42,7 +38,7 @@ def check_label_age(filename: str, verbose, deep=False):
 
     Audacity is opened only when *some* label file is older than the ``.aup3``;
     once open, every label file is compared. With ``deep=True`` (the CLI's
-    ``-c -f``) it is opened even when they are all newer. That costs an Audacity
+    ``check -f``) it is opened even when they are all newer. That costs an Audacity
     open on every run but never gives a false "nothing to do": mtimes lie when
     something rewrites a label file without touching the project (e.g. ``git
     checkout``, ``touch``, a restore), leaving it newer than the ``.aup3`` while
@@ -142,7 +138,7 @@ def _any_label_file_older(label_files, filename):
     ``GetInfo`` fetches all tracks in one call and comparing one more costs about
     0.2 ms, so filtering per file saved nothing measurable while silently hiding
     tracks -- a run would list three and give no hint a fourth existed, which is
-    exactly what ``-q`` and ``-t`` cause by rewriting a ``.txt``.
+    exactly what ``quantize`` and ``transpose`` cause by rewriting a ``.txt``.
     """
     aup3_mtime = filename.stat().st_mtime
     return any(f.stat().st_mtime < aup3_mtime for f in label_files)
@@ -155,7 +151,7 @@ def _check_label_age_via_getinfo(filename, label_files):
     for why there is no per-file gate.
     """
     contents = af.get_label_tracks_content_via_getinfo()
-    # Beside the project being checked, not in the cwd: `rebuildap -c
+    # Beside the project being checked, not in the cwd: `rebuildap check
     # /elsewhere/song.aup3` used to scatter export artifacts wherever it
     # happened to be run from.
     out_dir = Path(filename).expanduser().resolve().parent
@@ -186,8 +182,8 @@ def _report_audacity_only_tracks(contents, label_files, stem, out_dir):
 
     The comparison loop above is file-driven, so a track that lives only in the
     project — added in Audacity and never exported — is otherwise invisible to
-    ``-c``. Report each and point at the export route, but never auto-write it:
-    the versioned ``.txt`` files are the source of truth, and the no-arg export
+    ``check``. Report each and point at the export route, but never auto-write it:
+    the versioned ``.txt`` files are the source of truth, and a bare ``export``
     is the deliberate path for creating them.
     """
     on_disk = {_short_label_name(lf, stem) for lf in label_files}
@@ -268,8 +264,8 @@ def prerequisites_met() -> bool:
 
     Every branch reports unconditionally rather than under ``-v``: these all end
     with the command doing nothing, and a silent do-nothing run is
-    indistinguishable from a broken one -- the same bug `-c`'s "nothing to do"
-    and the no-arg export's silent success were both fixed for.
+    indistinguishable from a broken one -- the same bug `check`'s "nothing to do"
+    and a bare `export`'s silent success were both fixed for.
     """
     if not ap.is_audacity_running():
         print("Audacity is not running; nothing to export.", file=sys.stderr)
@@ -295,117 +291,132 @@ def prerequisites_met() -> bool:
     return True
 
 
-def rebuild(
-    filename=None,
-    verbose=False,
-    label=False,
-    check=False,
-    save=True,
-    deep=False,
-    force=False,
-    quantize=None,
-    transpose=None,
-    sharps=False,
-):
-    if check:
-        check_label_age(filename, verbose, deep=deep)
-    elif quantize is not None:
-        # Operates on the open project, no filename (guarded in main()).
-        _quantize_open_project(quantize, verbose, force)
-    elif transpose is not None:
-        # Likewise open-project only, and mutually exclusive with -q.
-        _transpose_open_project(transpose, sharps, verbose, force)
-    elif filename:
-        filename = Path(filename)
-        if label:
-            if verbose:
-                print("importing label into open Audacity project.")
-            try:
-                af.make_label_track_from_file(filename)
-            except af.LabelFormatError as e:
-                raise SystemExit(f"{e}") from e
-            return
-        # Rebuilding audio into a project whose .aup3 already exists throws the
-        # result away: save_project_if_absent will decline to overwrite, leaving
-        # the rebuilt project open and *unsaved* — and an unsaved project cannot
-        # be closed safely, since Cmd-W on one raises "Save changes?", the dialog
-        # that wedges the scripting pipe. The existing file is knowable up front,
-        # so none of that work is started. With -n the throwaway window is what
-        # the user asked for, so this does not apply.
-        if save and not af.is_audacity_project(filename):
-            existing = af.aup3_path_for(filename)
-            if existing.exists():
-                raise SystemExit(
-                    f"{existing.name} already exists beside {filename.name} and is "
-                    "never overwritten - it is your working copy and may hold edits "
-                    "the label files don't have. Nothing was rebuilt. Use -n to "
-                    "rebuild into an unsaved window anyway, or move the existing "
-                    f"{existing.name} aside first."
-                )
-        # Validate label files before starting Audacity: a malformed one
-        # otherwise crashes mid-rebuild, after the audio is imported and the
-        # window is open but unsaved (nothing can then close it safely). Only
-        # for audio input — .aup3 input exports labels, it does not import them.
-        if not af.is_audacity_project(filename):
-            try:
-                af.assert_label_files_importable(filename)
-            except af.LabelFormatError as e:
-                raise SystemExit(f"{e}") from e
-        try:
-            af.assert_not_already_open(filename)
-            ap.assert_audacity(verbose)
-            af.open_audio(filename, verbose)
-        except af.ProjectAlreadyOpenError as e:
-            # A single explicit target, unlike the sweep in check mode: report
-            # cleanly rather than with a traceback, but exit non-zero, since
-            # the work the user asked for did not happen.
-            raise SystemExit(f"{e}") from e
-        if af.is_audacity_project(filename):
-            if verbose:
-                print(f"exporting labels from Audacity project ({Path(filename).name})")
-            af.export_label_tracks_via_getinfo(filename)
-            # TODO: export audio tracks, same naming scheme as labels (but ending in mp3)
-            #       song track: "orig"
-            #       other tracks: guitar (etc.)
-        else:
-            if verbose:
-                print(
-                    f"rebuilt Audacity project from audio and labels ({Path(filename).name})"
-                )
-            if save:
-                saved = af.save_project_if_absent(filename, verbose)
-                if saved is not None:
-                    # Keep the label files from reading as stale to -c; they
-                    # are what the project was just built from.
-                    af.touch_label_files(filename, saved, verbose)
-                    # Saving retitles the window to the .aup3 stem, which both
-                    # identifies it as ours and makes Cmd-W close silently.
-                    # An unsaved project would instead raise "Save changes?",
-                    # a dialog that wedges the scripting pipe — so the window
-                    # is only ever closed once it is safely on disk.
-                    ap.close_owned_window(saved.stem, verbose)
-                elif verbose:
-                    print(
-                        "Leaving the rebuilt project open: it was not saved, so "
-                        "closing it would raise a 'Save changes?' dialog."
-                    )
-            elif verbose:
-                print(
-                    "Leaving the rebuilt project open (--no-save); closing an "
-                    "unsaved project would raise a 'Save changes?' dialog."
-                )
+def _open_in_audacity(path, verbose):
+    """Start Audacity if needed and open ``path``, refusing if it is already open.
 
-    elif prerequisites_met():
-        _export_open_project_labels(verbose, force)
+    Shared by ``build`` and a file-named ``export`` -- the two commands that hand
+    Audacity a path. A single explicit target, unlike the sweep in ``check``:
+    report cleanly rather than with a traceback, but exit non-zero, since the
+    work the user asked for did not happen.
+    """
+    try:
+        af.assert_not_already_open(path)
+        ap.assert_audacity(verbose)
+        af.open_audio(path, verbose)
+    except af.ProjectAlreadyOpenError as e:
+        raise SystemExit(f"{e}") from e
+
+
+def _build_project(audio, verbose=False, save=True):
+    """``build``: import an audio file plus the label files beside it, and save.
+
+    The versioned ``*_<stem>.txt`` files next to ``audio`` become label tracks;
+    the result is saved as ``<stem>.aup3`` beside the audio unless ``save`` is
+    False (the CLI's ``-n``).
+    """
+    audio = Path(audio)
+    if af.is_audacity_project(audio):
+        raise SystemExit(
+            f"{audio.name} is already an Audacity project, so there is nothing to "
+            f"rebuild. Use `rebuildap export {audio.name}` to export its label "
+            "tracks."
+        )
+    # Rebuilding audio into a project whose .aup3 already exists throws the
+    # result away: save_project_if_absent will decline to overwrite, leaving
+    # the rebuilt project open and *unsaved* - and an unsaved project cannot
+    # be closed safely, since Cmd-W on one raises "Save changes?", the dialog
+    # that wedges the scripting pipe. The existing file is knowable up front,
+    # so none of that work is started. With -n the throwaway window is what
+    # the user asked for, so this does not apply.
+    if save:
+        existing = af.aup3_path_for(audio)
+        if existing.exists():
+            raise SystemExit(
+                f"{existing.name} already exists beside {audio.name} and is "
+                "never overwritten - it is your working copy and may hold edits "
+                "the label files don't have. Nothing was rebuilt. Use -n to "
+                "rebuild into an unsaved window anyway, or move the existing "
+                f"{existing.name} aside first."
+            )
+    # Validate label files before starting Audacity: a malformed one otherwise
+    # crashes mid-rebuild, after the audio is imported and the window is open
+    # but unsaved (nothing can then close it safely).
+    try:
+        af.assert_label_files_importable(audio)
+    except af.LabelFormatError as e:
+        raise SystemExit(f"{e}") from e
+    _open_in_audacity(audio, verbose)
+    if verbose:
+        print(f"rebuilt Audacity project from audio and labels ({audio.name})")
+    if not save:
+        if verbose:
+            print(
+                "Leaving the rebuilt project open (--no-save); closing an "
+                "unsaved project would raise a 'Save changes?' dialog."
+            )
+        return
+    saved = af.save_project_if_absent(audio, verbose)
+    if saved is None:
+        if verbose:
+            print(
+                "Leaving the rebuilt project open: it was not saved, so "
+                "closing it would raise a 'Save changes?' dialog."
+            )
+        return
+    # Keep the label files from reading as stale to `check`; they are what the
+    # project was just built from.
+    af.touch_label_files(audio, saved, verbose)
+    # Saving retitles the window to the .aup3 stem, which both identifies it as
+    # ours and makes Cmd-W close silently. An unsaved project would instead
+    # raise "Save changes?", a dialog that wedges the scripting pipe - so the
+    # window is only ever closed once it is safely on disk.
+    ap.close_owned_window(saved.stem, verbose)
+
+
+def _export_labels(aup3=None, verbose=False, force=False):
+    """``export``: write label tracks out as versioned ``.txt`` files.
+
+    With ``aup3`` the named project is opened and every label track exported
+    beside it; without one the already-open project is used, which is where
+    ``force`` applies (see :func:`_resolve_export_dir`).
+    """
+    if aup3 is None:
+        if prerequisites_met():
+            _export_open_project_labels(verbose, force)
+        return
+    aup3 = Path(aup3)
+    if not af.is_audacity_project(aup3):
+        raise SystemExit(
+            f"{aup3.name} is not an Audacity project, so it has no label tracks "
+            f"to export. Use `rebuildap build {aup3.name}` to rebuild a project "
+            "from audio and its label files."
+        )
+    _open_in_audacity(aup3, verbose)
+    if verbose:
+        print(f"exporting labels from Audacity project ({aup3.name})")
+    af.export_label_tracks_via_getinfo(aup3)
+    # TODO: export audio tracks, same naming scheme as labels (but ending in mp3)
+    #       song track: "orig"
+    #       other tracks: guitar (etc.)
+
+
+def _import_label_file(labelfile, verbose=False):
+    """``import``: add a label file to the open project as a label track."""
+    if verbose:
+        print("importing label into open Audacity project.")
+    try:
+        af.make_label_track_from_file(Path(labelfile))
+    except af.LabelFormatError as e:
+        raise SystemExit(f"{e}") from e
 
 
 def _open_project_stem_or_exit():
     """The open project's ``.aup3`` stem, or a clean exit when it is ambiguous.
 
-    Shared by every mode that acts on whatever project is open (the no-arg
-    export, ``-q``, ``-t``) -- all three name their versioned ``.txt`` files
-    after it, so all three must refuse identically rather than write one
-    project's labels into another's files.
+    Shared by every command that acts on whatever project is open (a bare
+    ``export``, ``quantize``, ``transpose``) -- all three name their versioned
+    ``.txt`` files after it, so all three must refuse identically rather than
+    write one project's labels into another's files.
     """
     try:
         return af.open_project_stem()
@@ -422,7 +433,7 @@ def _resolve_export_dir(stem, force=False):
     Audacity's Open Recent says it lives and refuse (return ``None``) so the
     user cd's there; ``force`` overrides that and returns cwd anyway; and when
     nothing can be suggested, warn but fall back to cwd rather than block.
-    Messaging goes to stderr. Shared by the no-arg export and ``-q``.
+    Messaging goes to stderr. Shared by a bare ``export`` and ``quantize``.
     """
     cwd = Path.cwd()
     if af.dir_holds_project(cwd, stem):
@@ -490,10 +501,10 @@ def _export_open_project_labels(verbose, force=False):
 def _resolve_project_dir(stem, flag):
     """Directory for an in-place mode's versioned ``.txt`` -- the open project's own.
 
-    Unlike the no-arg export (which only ever writes cwd), the in-place modes
-    (``-q``, ``-t``) write to wherever the project actually lives, so the file and
-    the just-modified project stay consistent no matter what cwd the command was
-    run from: cwd when it holds the project, else the single directory Audacity's
+    Unlike a bare ``export`` (which only ever writes cwd), the in-place commands
+    (``quantize``, ``transpose``) write to wherever the project actually lives,
+    so the file and the just-modified project stay consistent no matter what cwd
+    it was run from: cwd when it holds the project, else the single directory Audacity's
     Open Recent reports for this stem. Refuses (returns ``None``, explaining on
     stderr) when that directory is ambiguous (same stem in several places) or
     unknown, so a source-of-truth file is never scattered. ``flag`` names the mode
@@ -526,31 +537,29 @@ def _resolve_project_dir(stem, flag):
     return None
 
 
-def _quantize_open_project(quantize, verbose, force=False):
+def _quantize_open_project(beats_track=None, verbose=False, force=False):
     """Quantize the selected label track to a beats track, in place, then persist.
 
-    ``quantize`` is the CLI value: :data:`_QUANTIZE_AUTODETECT` for a bare ``-q``
-    (find the beats track), or a track name from ``-q <name>``. Only boundaries
-    inside the current time selection are snapped (whole track when nothing is
-    selected); ``force`` (``-f``) quantizes the whole track without reading the
-    selection, and is the escape hatch the message points at when the selection
-    cannot be read. The quantized labels are written straight to the project's
-    own directory (no read-back export).
+    ``beats_track`` names the reference track, or is None to find it. Only
+    boundaries inside the current time selection are snapped (whole track when
+    nothing is selected); ``force`` (``-f``) quantizes the whole track without
+    reading the selection, and is the escape hatch the message points at when the
+    selection cannot be read. The quantized labels are written straight to the
+    project's own directory (no read-back export).
 
     The write directory is resolved *before* the project is touched, so a
     location we cannot write to is a clean refusal rather than a quantized-but-
     unpersisted half-state.
     """
-    reference_name = None if quantize is _QUANTIZE_AUTODETECT else quantize
     if not prerequisites_met():
         return
     stem = _open_project_stem_or_exit()
-    out_dir = _resolve_project_dir(stem, "-q")
+    out_dir = _resolve_project_dir(stem, "quantize")
     if out_dir is None:
         return
     try:
         target_name, _idx, content, changed = af.quantize_selected_label_track(
-            reference_name, verbose, whole_track=force
+            beats_track, verbose, whole_track=force
         )
     except af.SelectionReadError as e:
         raise SystemExit(
@@ -570,7 +579,7 @@ def _write_if_divergent(out_path, content):
     """Write ``content`` to ``out_path`` unless the file already holds equivalent
     labels. Returns True iff it wrote.
 
-    Equivalence uses the same normalization ``-c`` compares with
+    Equivalence uses the same normalization ``check`` compares with
     (:func:`process_lines` -> ``cut_trailing_zeros``), so a file that differs only
     in float formatting is left untouched -- source-of-truth files are never
     rewritten with identical content.
@@ -585,7 +594,7 @@ def _write_if_divergent(out_path, content):
 
 
 def _report_quantize_outcome(target_name, out_path, changed, wrote):
-    """State plainly what ``-q`` did, across the four project-changed/file-written
+    """State plainly what ``quantize`` did, across the four project-changed/file-written
     combinations -- so an already-quantized track reads as 'nothing to do', not as
     a silent success."""
     if changed and wrote:
@@ -604,7 +613,7 @@ def _report_quantize_outcome(target_name, out_path, changed, wrote):
         )
 
 
-def _transpose_open_project(semitones, sharps, verbose, force=False):
+def _transpose_open_project(semitones, sharps=False, verbose=False, force=False):
     """Transpose the selected label track's chords in place, then persist.
 
     Mirrors :func:`_quantize_open_project`: the write directory is resolved
@@ -612,12 +621,12 @@ def _transpose_open_project(semitones, sharps, verbose, force=False):
     selection are transposed (whole track when nothing is selected, or with
     ``-f``), and the result is written straight to the project's own directory.
 
-    ``sharps`` (``-s``) opts out of the flat spelling ``-t`` defaults to.
+    ``sharps`` (``-s``) opts out of the flat spelling ``transpose`` defaults to.
     """
     if not prerequisites_met():
         return
     stem = _open_project_stem_or_exit()
-    out_dir = _resolve_project_dir(stem, f"-t {semitones}")
+    out_dir = _resolve_project_dir(stem, f"transpose {semitones}")
     if out_dir is None:
         return
     try:
@@ -649,12 +658,12 @@ _MAX_SKIPPED_LISTED = 8
 def _report_transpose_outcome(
     target_name, out_path, semitones, prefer_flats, changed, wrote, skipped
 ):
-    """State plainly what ``-t`` did, naming the spelling it used.
+    """State plainly what ``transpose`` did, naming the spelling it used.
 
     The spelling is always named: rebuildap defaults to flats while the sister
     library defaults to sharps, so a chart coming back respelled must never be a
     silent surprise (decisions.md 2026-07-25 12:45). Labels that held no chord are
-    named too -- silence there is the failure mode ``-q`` and the no-arg export
+    named too -- silence there is the failure mode ``quantize`` and a bare ``export``
     both had to fix.
     """
     spelling = "flats" if prefer_flats else "sharps"
@@ -695,51 +704,120 @@ def _report_exports(exported):
         print(f"{_PATH_INDENT}{path}")
 
 
-def main():
+_PROG = "rebuildap"
+
+# The commands, in the order --help lists them: the two that take a file first,
+# then the two that read a project, then the two that rewrite one in place.
+_COMMANDS = ("build", "export", "check", "import", "quantize", "transpose")
+
+# A first token that is not a command gets this one prepended, so `rebuildap`,
+# `rebuildap -v` and `rebuildap song.aup3` all keep working.
+_DEFAULT_COMMAND = "export"
+
+# Asked at the top level these are about rebuildap itself, not about a command,
+# so they must reach the top-level parser rather than _DEFAULT_COMMAND's.
+_TOP_LEVEL_OPTIONS = ("-h", "--help", "-V", "--version")
+
+# The mode flags this CLI used to have, and the command that replaced each.
+# Retired flags are in muscle memory and in shell history, and argparse's bare
+# "unrecognized arguments" would not say where they went.
+_RETIRED_FLAGS = {
+    "-c": "check",
+    "--check": "check",
+    "-l": "import",
+    "--label": "import",
+    "-q": "quantize",
+    "--quantize": "quantize",
+    "-t": "transpose",
+    "--transpose": "transpose",
+    "-n": "build",
+    "--no-save": "build",
+    "-s": "transpose",
+    "--sharps": "transpose",
+}
+
+
+def _resolve_command(parser, argv):
+    """Return ``argv`` with a command in front of it, or exit naming one.
+
+    Only the leading token decides: a command runs as given, ``-h``/``-V`` go to
+    the top-level parser, and anything else is treated as an argument to
+    :data:`_DEFAULT_COMMAND`. A retired mode flag is caught here rather than
+    handed on, since ``export -c`` would otherwise fail as an unknown option.
+    """
+    if argv and (argv[0] in _COMMANDS or argv[0] in _TOP_LEVEL_OPTIONS):
+        return argv
+    for token in argv:
+        command = _RETIRED_FLAGS.get(token.split("=", 1)[0])
+        if command:
+            parser.error(
+                f"{token} is no longer an option - it is now a command: "
+                f"`{_PROG} {command}`. See `{_PROG} --help`."
+            )
+    return [_DEFAULT_COMMAND, *argv]
+
+
+def _build_parser():
+    """The command-line surface: one subparser per command.
+
+    Modes used to be flags on a single parser, which took five hand-written
+    guards to reject the combinations argparse could not express, and left ``-f``
+    with four context-specific meanings. Each command now declares its own
+    arguments, so those combinations are unrepresentable and every ``--force``
+    means exactly one thing. See decisions.md 2026-07-28 18:09.
+    """
     parser = argparse.ArgumentParser(
-        description="rebuild Audacity project",
+        prog=_PROG,
+        # Hard-wrapped: RawDescriptionHelpFormatter (needed for the epilog's
+        # layout) prints the description verbatim rather than reflowing it.
+        description=(
+            "Keep Audacity label tracks in plain text: export them, check them\n"
+            "against the project, transform them in place, and rebuild the whole\n"
+            "project from them."
+        ),
         epilog=(
-            "Input modes:\n"
-            "  audio file   imported; matching *_<stem>.txt become label tracks\n"
-            "  .aup3        its label tracks are exported to .txt files\n"
-            "  (nothing)    the open Audacity project is used - selected label\n"
-            "               tracks are exported, or all of them if none are\n"
-            "               selected; with -f, into the current directory even\n"
-            "               when the project appears to live elsewhere\n"
-            "\n"
-            "Transform modes (-q, -t) take no filename: they rewrite the selected\n"
-            "label track of the open project in place and update its versioned\n"
-            ".txt. One at a time.\n"
+            f"Run `{_PROG} COMMAND --help` for a command's own options.\n"
+            f"\n"
+            f"`{_PROG}` on its own means `{_PROG} export`: the open project's\n"
+            f"label tracks are written into the current directory - the selected\n"
+            f"ones, or all of them if none are selected.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "filename",
-        nargs="?",
-        help=(
-            "Audio to rebuild a project from, or an .aup3 to export labels "
-            "from. Omit to export the open Audacity project's labels (see "
-            "Input modes below)."
-        ),
+        "-V",
+        "--version",
+        action="version",
+        version=get_version_info(_pkg_version(_PROG)),
     )
-    parser.add_argument(
+    # -v lives on a shared parent, so it follows the command. Declaring it on the
+    # top-level parser as well would not work: argparse writes the subparser's
+    # defaults into the same namespace afterwards, silently resetting it.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose mode."
     )
-    parser.add_argument("-l", "--label", action="store_true", help="Import label file.")
-    parser.add_argument(
-        "-c",
-        "--check",
-        action="store_true",
-        help=(
-            "Check whether Audacity file is newer than label files and show "
-            "differences. Audacity is opened only when some label file is older "
-            "than the .aup3; every label file is then compared. With -f, open "
-            "even when all of them are newer - opens Audacity every run, and "
-            "catches label files rewritten (by e.g. git checkout, touch) without "
-            "changing the project."
+    commands = parser.add_subparsers(dest="command", metavar="COMMAND", required=True)
+
+    build = commands.add_parser(
+        "build",
+        parents=[common],
+        help="Rebuild a project from an audio file and its label files.",
+        description=(
+            "Import AUDIO into a new Audacity project, turning every "
+            "*_<stem>.txt file beside it into a label track, and save the "
+            "result as <stem>.aup3 next to the audio."
         ),
     )
-    parser.add_argument(
+    build.add_argument(
+        "audio",
+        metavar="AUDIO",
+        help=(
+            "Audio file to rebuild from (.mp3, .wav, anything Audacity "
+            "imports). Every *_<stem>.txt beside it becomes a label track."
+        ),
+    )
+    build.add_argument(
         "-n",
         "--no-save",
         action="store_true",
@@ -749,105 +827,205 @@ def main():
             "existing one is never overwritten."
         ),
     )
-    parser.add_argument(
+    build.set_defaults(
+        func=lambda args: _build_project(
+            audio=args.audio, verbose=args.verbose, save=not args.no_save
+        )
+    )
+
+    export = commands.add_parser(
+        "export",
+        parents=[common],
+        help="Export label tracks to versioned .txt files.",
+        description=(
+            "Write label tracks out as the versioned *_<stem>.txt files, named "
+            "after the project's .aup3 stem. With AUP3 they land beside that "
+            "file; with no argument the open project is used and they land in "
+            "the current directory, which is where these source-of-truth files "
+            "belong."
+        ),
+    )
+    export.add_argument(
+        "aup3",
+        nargs="?",
+        metavar="AUP3",
+        help=(
+            "Project whose label tracks to export. Omit to export the open "
+            "Audacity project's - the selected tracks, or all of them if none "
+            "are selected."
+        ),
+    )
+    export.add_argument(
         "-f",
         "--force",
         action="store_true",
-        # Deliberately an index rather than an enumeration: each mode documents
-        # what -f does *there* (-q and -t in their own help, the no-argument
-        # export in the epilog), so no sentence appears twice and a new mode
-        # cannot leave this entry stale -- as -t did.
         help=(
-            "Force. What it overrides depends on the mode - see -c, -q, -t and "
-            '"Input modes" below. Never overrides the never-overwrite rule for '
-            "an existing .aup3."
+            "Export the open project into the current directory even when it "
+            "appears to live elsewhere. Applies only without AUP3, which "
+            "exports beside itself."
         ),
     )
-    parser.add_argument(
-        "-q",
-        "--quantize",
+    export.set_defaults(
+        func=lambda args: _export_labels(
+            aup3=args.aup3, verbose=args.verbose, force=args.force
+        )
+    )
+
+    check = commands.add_parser(
+        "check",
+        parents=[common],
+        help="Compare a project's label tracks with the versioned .txt files.",
+        description=(
+            "Report where the project and its versioned label files have "
+            "diverged, and update any .txt whose content changed. Label tracks "
+            "that exist only in Audacity are flagged too."
+        ),
+    )
+    check.add_argument(
+        "aup3",
         nargs="?",
-        const=_QUANTIZE_AUTODETECT,
-        default=None,
+        metavar="AUP3",
+        help="Project to check. Omit to use the sole .aup3 in the current directory.",
+    )
+    check.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help=(
+            "Open Audacity and compare every label file even when all of them "
+            "are newer than the .aup3. Opens Audacity every run, and catches "
+            "label files rewritten (by e.g. git checkout, touch) without "
+            "changing the project."
+        ),
+    )
+    check.set_defaults(
+        func=lambda args: check_label_age(
+            filename=args.aup3,
+            verbose=args.verbose,
+            # The CLI surface is --force; the internal concept stays "deep"
+            # because that is what it does - skip the mtime gate and compare
+            # everything.
+            deep=args.force,
+        )
+    )
+
+    import_ = commands.add_parser(
+        "import",
+        parents=[common],
+        help="Import a label file into the open project as a label track.",
+        description=(
+            "Add LABELFILE to the open Audacity project as a label track. The "
+            "file may be 1-, 2- or 3-column; it is normalized on import and "
+            "never rewritten."
+        ),
+    )
+    import_.add_argument(
+        "labelfile",
+        metavar="LABELFILE",
+        help="Label file to import; its <name>_<stem>.txt prefix names the track.",
+    )
+    import_.set_defaults(
+        func=lambda args: _import_label_file(
+            labelfile=args.labelfile, verbose=args.verbose
+        )
+    )
+
+    quantize = commands.add_parser(
+        "quantize",
+        parents=[common],
+        help="Snap the selected label track to a beats track, in place.",
+        description=(
+            "Snap the selected label track's boundaries to a beats label track "
+            "already in the open project, re-import it at its original "
+            "position, and update its versioned .txt to match."
+        ),
+    )
+    quantize.add_argument(
+        "beats_track",
+        nargs="?",
         metavar="BEATS_TRACK",
         help=(
-            "Quantize the selected label track in the open project to a beats "
-            "label track already in it, in place: its label boundaries snap to "
-            "the beats grid, the track is re-imported at its original position, "
-            "and its versioned .txt is updated to match. Give a track name to "
-            "pick the reference, or omit it to auto-detect it: the sole label "
+            "Label track to snap to. Omit to auto-detect it: the sole label "
             f"track whose name starts with '{af.BEATS_TRACK_PREFIX}' "
-            "(case-insensitive). When a time "
-            "selection is active, only the boundaries inside it are snapped; -f "
-            "always quantizes the whole track."
+            "(case-insensitive)."
         ),
     )
-    parser.add_argument(
-        "-t",
-        "--transpose",
-        type=int,
-        default=None,
-        metavar="SEMITONES",
+    quantize.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
         help=(
-            "Transpose the chords in the selected label track of the open "
-            "project by SEMITONES half steps (negative transposes down), in "
-            "place, and update its versioned .txt to match. Label text that is "
-            "not a chord (section markers, lyric cues, fingerings) is left alone "
-            "and reported. Chords are spelled with flats unless -s is given. "
-            "When a time selection is active, only the labels starting inside it "
-            "are transposed; -f always transposes the whole track."
+            "Quantize the whole track without reading the time selection. By "
+            "default only the boundaries inside an active selection are "
+            "snapped."
         ),
     )
-    parser.add_argument(
+    quantize.set_defaults(
+        func=lambda args: _quantize_open_project(
+            beats_track=args.beats_track, verbose=args.verbose, force=args.force
+        )
+    )
+
+    transpose = commands.add_parser(
+        "transpose",
+        parents=[common],
+        help="Transpose the selected label track's chords, in place.",
+        description=(
+            "Transpose the chords in the open project's selected label track by "
+            "SEMITONES half steps and update its versioned .txt to match. Label "
+            "text that is not a chord (section markers, lyric cues, fingerings) "
+            "is left alone and reported."
+        ),
+    )
+    transpose.add_argument(
+        "semitones",
+        type=int,
+        metavar="SEMITONES",
+        help="Half steps to transpose by; negative transposes down.",
+    )
+    transpose.add_argument(
         "-s",
         "--sharps",
         action="store_true",
         help=(
-            "With -t, spell transposed chords with sharps (A#) instead of the "
-            "default flats (Bb)."
+            "Spell transposed chords with sharps (A#) instead of the default "
+            "flats (Bb)."
         ),
     )
-    parser.add_argument(
-        "-V",
-        "--version",
-        action="version",
-        version=get_version_info(_pkg_version("rebuildap")),
+    transpose.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help=(
+            "Transpose the whole track without reading the time selection. By "
+            "default only the labels starting inside an active selection are "
+            "transposed."
+        ),
     )
-    args = parser.parse_args()
-    # -f is valid for -c (compare every label file, past the mtime gate), -q, -t
-    # and the no-argument export. It is meaningless for a rebuild or a label
-    # import - note -c takes a filename, so a filename alone does not disqualify.
-    if args.force and (args.label or (args.filename and not args.check)):
-        parser.error("--force applies to -c, -q, -t or the no-argument export.")
-    if args.quantize is not None and (args.filename or args.check or args.label):
-        parser.error(
-            "--quantize operates on the open project; not with a filename, -c, or -l."
+    transpose.set_defaults(
+        func=lambda args: _transpose_open_project(
+            semitones=args.semitones,
+            sharps=args.sharps,
+            verbose=args.verbose,
+            force=args.force,
         )
-    if args.transpose is not None and (args.filename or args.check or args.label):
-        parser.error(
-            "--transpose operates on the open project; not with a filename, -c, or -l."
-        )
-    if args.quantize is not None and args.transpose is not None:
-        parser.error(
-            "--quantize and --transpose both rewrite the selected label track; "
-            "run one at a time."
-        )
-    if args.sharps and args.transpose is None:
-        parser.error("--sharps only applies with --transpose/-t.")
-    rebuild(
-        args.filename,
-        args.verbose,
-        args.label,
-        args.check,
-        save=not args.no_save,
-        # The CLI surface is -f; the internal concept stays "deep" because that
-        # is what it does - skip the mtime gate and compare everything.
-        deep=args.force,
-        force=args.force,
-        quantize=args.quantize,
-        transpose=args.transpose,
-        sharps=args.sharps,
     )
+    return parser
+
+
+def main(argv=None):
+    parser = _build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(_resolve_command(parser, argv))
+    # The one combination still worth rejecting by hand: a named .aup3 exports
+    # beside itself, so there is no current-directory decision for -f to
+    # override. Accepting and ignoring it is how a flag comes to mean nothing.
+    if args.command == "export" and args.aup3 and args.force:
+        parser.error(
+            "--force applies to the open-project export; "
+            "`export AUP3` writes beside that file."
+        )
+    args.func(args)
 
 
 if __name__ == "__main__":

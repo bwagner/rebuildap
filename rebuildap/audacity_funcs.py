@@ -160,7 +160,7 @@ class LabelTrackError(RuntimeError):
 
 
 class QuantizeError(LabelTrackError):
-    """The ``-q`` quantize request cannot be carried out as asked.
+    """The ``quantize`` request cannot be carried out as asked.
 
     Adds the quantize-specific precondition failures to
     :class:`LabelTrackError`: the named or auto-detected beats reference is
@@ -208,7 +208,8 @@ CMD_TRACK_MOVE_UP = "TrackMoveUp"
 CMD_TRACK_MOVE_DOWN = "TrackMoveDown"
 
 # Auto-detecting the beats reference track: a label track whose name begins
-# with this is taken to be the beats grid when ``-q`` is given no explicit name.
+# with this is taken to be the beats grid when ``quantize`` is given no explicit
+# name.
 BEATS_TRACK_PREFIX = "beat"
 
 # The sister quantize_labels.py script is shelled out to (kept a separate repo
@@ -381,7 +382,7 @@ def assert_label_files_importable(audio_filename: Path) -> None:
     malformed label file fails fast with a legible :class:`LabelFormatError`
     and no Audacity window is ever created -- mirroring the aup3-exists and
     already-open guards, which also refuse before launch. ``make_label_track_from_file``
-    re-validates as defense in depth for the ``-l`` single-file path.
+    re-validates as defense in depth for the ``import`` single-file path.
     """
     for label_file in create_labels_glob(audio_filename):
         normalize_label_file_for_import(label_file.expanduser().resolve())
@@ -948,7 +949,7 @@ def dir_holds_project(directory: Path, stem: str) -> bool:
     """True if ``directory`` looks like the project's own dir: it holds either
     ``<stem>.aup3`` or a versioned ``*_<stem>.txt`` label file.
 
-    The no-arg export only ever writes into the current directory, so this is
+    A bare ``export`` only ever writes into the current directory, so this is
     the gate that decides whether cwd is the right place to write — the
     source-of-truth label files must not be scattered into an unrelated dir.
     """
@@ -1089,8 +1090,8 @@ def _resolve_output_context(aup3_path=None, stem=None):
     """Return (out_dir: Path, aup3_stem: str).
 
     When ``aup3_path`` is given, derive both from it. Otherwise this is the
-    no-argument workflow: write into the current directory, with the open
-    project's own :func:`open_project_stem`. (The caller has already decided cwd
+    argument-less ``export`` workflow: write into the current directory, with
+    the open project's own :func:`open_project_stem`. (The caller has already decided cwd
     is the right place - see :func:`dir_holds_project` - so no resolution
     happens here.)
 
@@ -1176,11 +1177,11 @@ def export_selected_or_all_label_tracks_via_getinfo(
 
 # --- transforming the selected label track in place (shared spine) ----------
 #
-# The modes that rewrite one label track in the open project (`-q` today) all
-# share the same skeleton: resolve the single selected label track, resolve how
-# much of it the current time selection covers, compute new content, then swap
-# that content in. Only the *computation* differs per mode, so it stays in the
-# mode's own function; the three steps around it live here.
+# The commands that rewrite one label track in the open project (`quantize`,
+# `transpose`) share the same skeleton: resolve the single selected label track,
+# resolve how much of it the current time selection covers, compute new content,
+# then swap that content in. Only the *computation* differs per command, so it
+# stays in that command's own function; the three steps around it live here.
 #
 # The label-format helpers these lean on (`_write_temp_label_txt`,
 # `_labels_from_txt`, `read_time_selection`) are defined further down with the
@@ -1262,7 +1263,7 @@ def replace_label_track(
     return True
 
 
-# --- quantize a selected label track to a beats track (the `-q` mode) --------
+# --- quantize a selected label track to a beats track (`rebuildap quantize`) -
 #
 # Snap the selected label track's boundaries onto the grid of a beats label
 # track already in the project, in place: export both to temp files, hand them
@@ -1304,13 +1305,13 @@ def resolve_quantize_targets(
         if not beats:
             raise QuantizeError(
                 "No beats label track found to quantize against; name one "
-                "explicitly with -q <track>."
+                "explicitly with `rebuildap quantize <track>`."
             )
         if len(beats) > 1:
             names = ", ".join(t[PROPERTY_NAME] for _, t in beats)
             raise QuantizeError(
                 f"Multiple beats label tracks found ({names}); name the one to "
-                "use with -q <track>."
+                "use with `rebuildap quantize <track>`."
             )
         reference_index, reference = beats[0]
     else:
@@ -1532,10 +1533,11 @@ def read_time_selection() -> Tuple[float, float]:
         out_path.unlink(missing_ok=True)
 
 
-# --- transpose a selected label track's chords (the `-t` mode) ---------------
+# --- transpose a selected label track's chords (`rebuildap transpose`) -------
 #
-# Snap-free sibling of `-q`: same spine (resolve the selected track, resolve the
-# selection scope, swap the new content in), but the *text* changes and the
+# Snap-free sibling of `quantize`: same spine (resolve the selected track,
+# resolve the selection scope, swap the new content in), but the *text* changes
+# and the
 # times do not. The chord parsing lives in the sister `transpose` package, which
 # knows nothing about Audacity or the label format -- this module owns the
 # format, that one owns the question "is this token a chord".
@@ -1549,7 +1551,7 @@ def _transposed_labels(
 ) -> Tuple[List[Tuple[float, float, str]], List[str]]:
     """Transpose the in-scope labels' chords. Returns ``(labels, skipped)``.
 
-    Scoping is per **label, by start position** -- deliberately unlike ``-q``'s
+    Scoping is per **label, by start position** -- deliberately unlike ``quantize``'s
     per-boundary rule, because a chord belongs to its onset and there is no half
     a label to transpose. ``selection`` of ``None`` means the whole track.
 
@@ -1591,7 +1593,7 @@ def transpose_selected_label_track(
     """Transpose the selected label track's chords, in place.
 
     Returns ``(target_name, target_index, content, changed, skipped)`` --
-    the same shape ``-q`` returns plus the list of in-scope labels that held no
+    the same shape ``quantize`` returns plus the list of in-scope labels that held no
     chord. ``content`` is the canonical ``.txt`` form for the caller to write as
     the versioned source of truth; it is also exactly what was imported, so file
     and track cannot diverge.
@@ -1599,7 +1601,7 @@ def transpose_selected_label_track(
     Flats by default: the corpus this serves is flat-heavy, unlike the sister
     library's own sharps default. See :func:`_transposed_labels`.
 
-    As with ``-q``, the selection is resolved *before* the project is touched, a
+    As with ``quantize``, the selection is resolved *before* the project is touched, a
     track whose content does not change is left entirely alone (no mtime bump,
     no undo churn), and every precondition failure is a :class:`LabelTrackError`.
     """
@@ -1850,10 +1852,10 @@ def save_project_if_absent(audio_path: Path, verbose: bool = False) -> Path | No
 def touch_label_files(audio_path: Path, reference: Path, verbose: bool = False) -> None:
     """Mark the label files as at least as new as ``reference`` (the saved .aup3).
 
-    ``-c`` treats any label file older than the .aup3 as possibly stale and
+    ``check`` treats any label file older than the .aup3 as possibly stale and
     re-exports it to diff. Straight after a rebuild the two provably agree — the
     project was just built from those very files — so without this every later
-    ``-c`` would open, export and diff the project forever, finding nothing.
+    ``check`` would open, export and diff the project forever, finding nothing.
     Check mode only rewrites label files when content diverges, so the condition
     never clears on its own.
     """

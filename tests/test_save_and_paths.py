@@ -470,7 +470,7 @@ def test_rebuild_refuses_when_the_aup3_already_exists(project, tmp_path, monkeyp
     rebuildap = _forbid_audacity(monkeypatch)
 
     with pytest.raises(SystemExit) as excinfo:
-        rebuildap.rebuild(str(project))
+        rebuildap._build_project(str(project))
 
     assert "song.aup3" in str(excinfo.value)
 
@@ -480,7 +480,7 @@ def test_the_refusal_points_at_the_way_forward(project, tmp_path, monkeypatch):
     rebuildap = _forbid_audacity(monkeypatch)
 
     with pytest.raises(SystemExit) as excinfo:
-        rebuildap.rebuild(str(project))
+        rebuildap._build_project(str(project))
 
     assert "-n" in str(excinfo.value)
 
@@ -496,7 +496,7 @@ def test_no_save_still_rebuilds_into_a_window(project, tmp_path, monkeypatch):
     monkeypatch.setattr(af, "assert_not_already_open", lambda _f: None)
     monkeypatch.setattr(af, "open_audio", lambda *a, **k: ran.append("imported"))
 
-    rebuildap.rebuild(str(project), save=False)
+    rebuildap._build_project(str(project), save=False)
 
     assert ran == ["imported"]
 
@@ -516,7 +516,7 @@ def test_an_existing_aup3_does_not_block_exporting_from_an_aup3(tmp_path, monkey
         af, "export_label_tracks_via_getinfo", lambda *a, **k: ran.append("exported")
     )
 
-    rebuildap.rebuild(str(aup3))
+    rebuildap._export_labels(str(aup3))
 
     assert ran == ["opened", "exported"]
 
@@ -847,7 +847,7 @@ def test_no_arg_exports_and_reports_when_cwd_is_the_project(
         lambda **k: [("chords", tmp_path / "chords_song.txt")],
     )
 
-    rebuildap.rebuild(verbose=False)
+    rebuildap._export_labels(verbose=False)
 
     out = capsys.readouterr().out
     assert "chords" in out
@@ -872,7 +872,7 @@ def test_no_arg_all_tracks_lists_every_track_when_cwd_is_the_project(
         ],
     )
 
-    rebuildap.rebuild(verbose=False)
+    rebuildap._export_labels(verbose=False)
 
     out = capsys.readouterr().out
     assert "parts" in out and "chords" in out
@@ -894,7 +894,7 @@ def test_no_arg_points_at_candidates_and_refuses_when_cwd_is_wrong(
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [candidate])
     _fail_if_exported(monkeypatch)
 
-    rebuildap.rebuild(verbose=False)
+    rebuildap._export_labels(verbose=False)
 
     err = capsys.readouterr().err
     assert str(candidate) in err
@@ -918,7 +918,7 @@ def test_no_arg_refusal_lists_each_candidate_on_its_own_line(
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [a, b])
     _fail_if_exported(monkeypatch)
 
-    rebuildap.rebuild(verbose=False)
+    rebuildap._export_labels(verbose=False)
 
     err = capsys.readouterr().err
     assert f"\n  {a}\n" in err
@@ -943,7 +943,7 @@ def test_no_arg_force_exports_to_cwd_despite_candidates(tmp_path, monkeypatch, c
         or [("chords", tmp_path / "chords_song.txt")],
     )
 
-    rebuildap.rebuild(verbose=False, force=True)
+    rebuildap._export_labels(verbose=False, force=True)
 
     captured = capsys.readouterr()
     assert exported == ["ran"], "must export into cwd under -f"
@@ -951,94 +951,201 @@ def test_no_arg_force_exports_to_cwd_despite_candidates(tmp_path, monkeypatch, c
     assert str(candidate) in captured.err  # the notice names where it lives
 
 
-def _run_main(monkeypatch, argv):
+# --- the subcommand surface ------------------------------------------------
+#
+# Modes used to be flags, and main() carried five hand-written guards rejecting
+# the combinations argparse could not express. Each command now declares its own
+# arguments, so those combinations are unrepresentable rather than caught: what
+# used to need a guard is tested here as an argparse rejection.
+
+
+def _dispatched(monkeypatch, argv, entry_point):
+    """Run main() on `argv` with `entry_point` stubbed; return how it was called.
+
+    The parser is built inside main(), so `set_defaults` resolves the entry point
+    at dispatch time and this stub is what actually runs. Returns the (args,
+    kwargs) it received, which is the parse result the CLI promises to deliver.
+    """
     import sys as _sys
 
     import rebuildap
 
     captured = {}
     monkeypatch.setattr(
-        rebuildap, "rebuild", lambda *a, **k: captured.update(args=a, kwargs=k)
+        rebuildap, entry_point, lambda *a, **k: captured.update(args=a, kwargs=k)
     )
     monkeypatch.setattr(_sys, "argv", argv)
     rebuildap.main()
     return captured
 
 
+def test_bare_invocation_still_exports_the_open_project(monkeypatch):
+    """`rebuildap` with nothing at all is the command's oldest habit; it must
+    survive the restructure untouched."""
+    captured = _dispatched(monkeypatch, ["rebuildap"], "_export_labels")
+    assert captured["kwargs"]["aup3"] is None
+
+
+def test_a_leading_option_reaches_export_too(monkeypatch):
+    """`rebuildap -v` names no command, so `export` is supplied for it."""
+    captured = _dispatched(monkeypatch, ["rebuildap", "-v"], "_export_labels")
+    assert captured["kwargs"]["aup3"] is None
+    assert captured["kwargs"]["verbose"] is True
+
+
+def test_an_aup3_without_a_command_is_exported(monkeypatch):
+    """`rebuildap song.aup3` kept working: a first token that is not a command
+    gets `export` prepended."""
+    captured = _dispatched(monkeypatch, ["rebuildap", "song.aup3"], "_export_labels")
+    assert captured["kwargs"]["aup3"] == "song.aup3"
+
+
 @pytest.mark.parametrize(
-    "argv",
+    "flag, command",
     [
-        ["rebuildap", "song.opus", "--force"],  # a rebuild has nothing to force
-        ["rebuildap", "-l", "--force"],  # nor does a label import
+        ("-c", "check"),
+        ("--check", "check"),
+        ("-l", "import"),
+        ("--label", "import"),
+        ("-q", "quantize"),
+        ("--quantize", "quantize"),
+        ("-t", "transpose"),
+        ("--transpose", "transpose"),
+        ("-n", "build"),
+        ("--no-save", "build"),
+        ("-s", "transpose"),
+        ("--sharps", "transpose"),
     ],
 )
-def test_force_is_rejected_where_it_means_nothing(monkeypatch, argv):
+def test_a_retired_flag_names_the_command_that_replaced_it(
+    monkeypatch, capsys, flag, command
+):
+    """The flags are gone, but they are in the user's fingers and in shell
+    history. Argparse's bare usage dump would not say where they went."""
     import sys as _sys
 
     import rebuildap
 
-    monkeypatch.setattr(_sys, "argv", argv)
+    monkeypatch.setattr(_sys, "argv", ["rebuildap", flag])
+    with pytest.raises(SystemExit) as excinfo:
+        rebuildap.main()
+
+    assert excinfo.value.code != 0
+    assert f"rebuildap {command}" in capsys.readouterr().err
+
+
+def test_force_is_not_offered_where_it_means_nothing(monkeypatch):
+    """build and import never had a --force to reject; now they cannot be given
+    one, so the guard that used to catch it is gone rather than moved."""
+    import sys as _sys
+
+    import rebuildap
+
+    for argv in (
+        ["rebuildap", "build", "song.opus", "--force"],
+        ["rebuildap", "import", "chords_song.txt", "--force"],
+    ):
+        monkeypatch.setattr(_sys, "argv", argv)
+        with pytest.raises(SystemExit) as excinfo:
+            rebuildap.main()
+        assert excinfo.value.code != 0
+
+
+def test_export_with_a_file_rejects_force(monkeypatch):
+    """Exporting a named .aup3 writes beside that file, so there is no cwd
+    decision for -f to override. Refuse rather than accept and ignore."""
+    import sys as _sys
+
+    import rebuildap
+
+    monkeypatch.setattr(_sys, "argv", ["rebuildap", "export", "song.aup3", "-f"])
     with pytest.raises(SystemExit) as excinfo:
         rebuildap.main()
     assert excinfo.value.code != 0
 
 
 def test_force_with_check_requests_the_deep_comparison(monkeypatch):
-    """-c -f replaced -c -d: it skips the mtime gate and compares every file.
-
-    Previously `-c -f` was a usage error, so this combination flipping from
-    rejected to meaningful is the whole point of the rename.
-    """
-    captured = _run_main(monkeypatch, ["rebuildap", "-c", "-f"])
+    """-f on check skips the mtime gate and compares every label file. The CLI
+    surface is --force; the internal concept stays "deep"."""
+    captured = _dispatched(monkeypatch, ["rebuildap", "check", "-f"], "check_label_age")
     assert captured["kwargs"]["deep"] is True
-    assert captured["args"][3] is True, "check is passed positionally"
 
 
-def test_force_with_check_and_a_filename_is_allowed(monkeypatch):
-    """-c takes a filename, so a filename must not disqualify -f the way it does
-    for a rebuild."""
-    captured = _run_main(monkeypatch, ["rebuildap", "-c", "song.aup3", "-f"])
+def test_check_takes_a_filename_alongside_force(monkeypatch):
+    captured = _dispatched(
+        monkeypatch, ["rebuildap", "check", "song.aup3", "-f"], "check_label_age"
+    )
     assert captured["kwargs"]["deep"] is True
-    assert captured["args"][0] == "song.aup3"
+    assert captured["kwargs"]["filename"] == "song.aup3"
 
 
 def test_check_without_force_is_not_deep(monkeypatch):
-    captured = _run_main(monkeypatch, ["rebuildap", "-c"])
+    captured = _dispatched(monkeypatch, ["rebuildap", "check"], "check_label_age")
     assert captured["kwargs"]["deep"] is False
+    assert captured["kwargs"]["filename"] is None
 
 
-def test_every_mode_that_accepts_force_documents_its_own_meaning(monkeypatch, capsys):
-    """-f's help is an index, not an enumeration, so each mode must say what -f
-    does *there*.
+def test_build_saves_unless_no_save_is_given(monkeypatch):
+    captured = _dispatched(
+        monkeypatch, ["rebuildap", "build", "song.opus"], "_build_project"
+    )
+    assert captured["kwargs"]["save"] is True
 
-    The enumeration went stale the moment -t was added -- it kept listing only
-    the export and -q senses. With the index form the risk inverts: a new mode
-    could accept -f and document it nowhere. This pins the convention for the
-    three that exist. See decisions.md 2026-07-25.
-    """
+    captured = _dispatched(
+        monkeypatch, ["rebuildap", "build", "song.opus", "-n"], "_build_project"
+    )
+    assert captured["kwargs"]["save"] is False
+
+
+def test_import_carries_the_label_file(monkeypatch):
+    captured = _dispatched(
+        monkeypatch, ["rebuildap", "import", "chords_song.txt"], "_import_label_file"
+    )
+    assert captured["kwargs"]["labelfile"] == "chords_song.txt"
+
+
+def _help_for(monkeypatch, capsys, argv):
     import sys as _sys
 
     import rebuildap
 
-    monkeypatch.setattr(_sys, "argv", ["rebuildap", "--help"])
+    monkeypatch.setattr(_sys, "argv", argv)
     with pytest.raises(SystemExit):
         rebuildap.main()
-    help_text = capsys.readouterr().out
+    return capsys.readouterr().out
 
-    force_entry = help_text.split("-f, --force")[1].split("-q, --quantize")[0]
-    assert "depends on the mode" in force_entry, "-f must point, not enumerate"
 
-    check_entry = help_text.split("-c, --check")[1].split("-n, --no-save")[0]
-    quantize_entry = help_text.split("-q, --quantize")[1].split("-t, --transpose")[0]
-    transpose_entry = help_text.split("-t, --transpose")[1].split("-s, --sharps")[0]
-    epilog = help_text.split("Input modes:")[1]
-    for name, entry in [
-        ("-c", check_entry),
-        ("-q", quantize_entry),
-        ("-t", transpose_entry),
-        ("the no-argument export (epilog)", epilog),
-    ]:
-        assert "-f" in entry, f"{name} accepts -f but does not document it"
+def test_top_level_help_lists_every_command(monkeypatch, capsys):
+    help_text = _help_for(monkeypatch, capsys, ["rebuildap", "--help"])
+    for command in ("build", "export", "check", "import", "quantize", "transpose"):
+        assert command in help_text
+
+
+@pytest.mark.parametrize("command", ["build", "import"])
+def test_commands_without_a_force_meaning_do_not_offer_one(
+    monkeypatch, capsys, command
+):
+    help_text = _help_for(monkeypatch, capsys, ["rebuildap", command, "--help"])
+    assert "--force" not in help_text
+
+
+def test_each_force_documents_what_it_does_in_that_command(monkeypatch, capsys):
+    """-f used to be one option with four meanings, and its help had to become an
+    index after the enumeration went stale when -t landed (decisions.md
+    2026-07-25 13:45). Each command now owns a --force with a single meaning, so
+    the test is that no two of them say the same thing.
+    """
+    entries = {}
+    for command in ("export", "check", "quantize", "transpose"):
+        help_text = _help_for(monkeypatch, capsys, ["rebuildap", command, "--help"])
+        assert "--force" in help_text, f"{command} must offer --force"
+        entries[command] = help_text.split("--force")[1].split("\n\n")[0].strip()
+        assert entries[command], f"{command}'s --force is undocumented"
+
+    assert len(set(entries.values())) == len(entries), (
+        "two commands describe --force identically; each must say what it does "
+        f"there: {entries}"
+    )
 
 
 def test_no_arg_exports_to_cwd_with_notice_when_no_candidates(
@@ -1059,7 +1166,7 @@ def test_no_arg_exports_to_cwd_with_notice_when_no_candidates(
         or [("chords", tmp_path / "chords_song.txt")],
     )
 
-    rebuildap.rebuild(verbose=False)
+    rebuildap._export_labels(verbose=False)
 
     captured = capsys.readouterr()
     assert exported == ["ran"], "must still export into cwd"

@@ -245,79 +245,68 @@ def test_no_selected_label_track_is_an_error(monkeypatch):
         af.transpose_selected_label_track(2)
 
 
-# --- CLI parsing and guards -------------------------------------------------
+# --- the transpose command --------------------------------------------------
 
 
-def _captured_rebuild(monkeypatch):
+def _dispatched(monkeypatch, argv):
+    """Run main() on `argv` with the transpose entry point stubbed out."""
     captured = {}
     monkeypatch.setattr(
-        rebuildap, "rebuild", lambda *a, **k: captured.update(args=a, kwargs=k)
+        rebuildap,
+        "_transpose_open_project",
+        lambda *a, **k: captured.update(args=a, kwargs=k),
     )
+    monkeypatch.setattr("sys.argv", argv)
+    rebuildap.main()
     return captured
 
 
-def test_t_flag_carries_the_semitone_count(monkeypatch):
-    captured = _captured_rebuild(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["rebuildap", "-t", "2"])
-    rebuildap.main()
-    assert captured["kwargs"]["transpose"] == 2
+def test_transpose_carries_the_semitone_count(monkeypatch):
+    captured = _dispatched(monkeypatch, ["rebuildap", "transpose", "2"])
+    assert captured["kwargs"]["semitones"] == 2
 
 
 def test_negative_semitones_are_accepted(monkeypatch):
-    """`-t -2` must transpose down, not be read as an unknown option."""
-    captured = _captured_rebuild(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["rebuildap", "-t", "-2"])
-    rebuildap.main()
-    assert captured["kwargs"]["transpose"] == -2
+    """`transpose -2` must transpose down, not be read as an unknown option.
+
+    argparse allows a leading-minus token as a positional only while no option
+    string looks like a negative number; this pins that nothing ever adds one.
+    """
+    captured = _dispatched(monkeypatch, ["rebuildap", "transpose", "-2"])
+    assert captured["kwargs"]["semitones"] == -2
 
 
-def test_no_t_flag_leaves_transpose_off(monkeypatch):
-    captured = _captured_rebuild(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["rebuildap"])
-    rebuildap.main()
-    assert captured["kwargs"]["transpose"] is None
+def test_semitones_are_required(monkeypatch):
+    """Transposing by nothing is not a default worth having."""
+    monkeypatch.setattr("sys.argv", ["rebuildap", "transpose"])
+    with pytest.raises(SystemExit) as excinfo:
+        rebuildap.main()
+    assert excinfo.value.code != 0
 
 
 def test_sharps_flag_is_passed_through(monkeypatch):
-    captured = _captured_rebuild(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["rebuildap", "-t", "2", "-s"])
-    rebuildap.main()
+    captured = _dispatched(monkeypatch, ["rebuildap", "transpose", "2", "-s"])
     assert captured["kwargs"]["sharps"] is True
 
 
-def test_t_with_force_is_allowed(monkeypatch):
-    captured = _captured_rebuild(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["rebuildap", "-t", "2", "-f"])
-    rebuildap.main()
-    assert captured["kwargs"]["transpose"] == 2
+def test_transpose_with_force_is_allowed(monkeypatch):
+    captured = _dispatched(monkeypatch, ["rebuildap", "transpose", "2", "-f"])
+    assert captured["kwargs"]["semitones"] == 2
     assert captured["kwargs"]["force"] is True
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["rebuildap", "-t", "2", "song.opus"],
-        ["rebuildap", "-t", "2", "-c"],
-        ["rebuildap", "-t", "2", "-l"],
-    ],
-)
-def test_transpose_rejects_a_filename_check_or_label(monkeypatch, argv):
-    monkeypatch.setattr("sys.argv", argv)
-    with pytest.raises(SystemExit):
-        rebuildap.main()
-
-
-def test_transpose_and_quantize_together_are_rejected(monkeypatch):
-    """One transform per run -- they would fight over the same track."""
-    monkeypatch.setattr("sys.argv", ["rebuildap", "-t", "2", "-q"])
-    with pytest.raises(SystemExit):
-        rebuildap.main()
-
-
-def test_sharps_without_transpose_is_rejected(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["rebuildap", "-s"])
-    with pytest.raises(SystemExit):
-        rebuildap.main()
+def test_sharps_belongs_to_transpose_alone(monkeypatch):
+    """-s used to need a guard saying it only applies with -t. It now exists
+    only under transpose, so no other command can be given it."""
+    for argv in (
+        ["rebuildap", "export", "-s"],
+        ["rebuildap", "quantize", "-s"],
+        ["rebuildap", "check", "-s"],
+    ):
+        monkeypatch.setattr("sys.argv", argv)
+        with pytest.raises(SystemExit) as excinfo:
+            rebuildap.main()
+        assert excinfo.value.code != 0
 
 
 # --- persisting the transposed track to the versioned .txt ------------------
@@ -353,7 +342,7 @@ def test_transpose_writes_the_versioned_txt_in_the_project_dir(
     (tmp_path / "song.aup3").write_text("")
     calls = _stub_transpose(monkeypatch)
 
-    rebuildap.rebuild(transpose=2)
+    rebuildap._transpose_open_project(2, verbose=False)
 
     written = tmp_path / "chords_song.txt"
     assert written.read_text() == "Bb\n"
@@ -366,7 +355,7 @@ def test_transpose_passes_sharps_through_to_the_orchestrator(monkeypatch, tmp_pa
     (tmp_path / "song.aup3").write_text("")
     calls = _stub_transpose(monkeypatch)
 
-    rebuildap.rebuild(transpose=2, sharps=True)
+    rebuildap._transpose_open_project(2, sharps=True, verbose=False)
 
     assert calls[0]["prefer_flats"] is False
 
@@ -376,7 +365,7 @@ def test_transpose_force_requests_the_whole_track(monkeypatch, tmp_path):
     (tmp_path / "song.aup3").write_text("")
     calls = _stub_transpose(monkeypatch)
 
-    rebuildap.rebuild(transpose=2, force=True)
+    rebuildap._transpose_open_project(2, force=True, verbose=False)
 
     assert calls[0]["whole_track"] is True
 
@@ -390,7 +379,7 @@ def test_transpose_refuses_before_mutating_when_project_dir_unknown(
     calls = _stub_transpose(monkeypatch)
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
 
-    rebuildap.rebuild(transpose=2)
+    rebuildap._transpose_open_project(2, verbose=False)
 
     assert calls == [], "must not transpose when the .txt cannot be written"
     assert "Open Recent" in capsys.readouterr().err
@@ -411,7 +400,7 @@ def test_transpose_refuses_before_mutating_when_the_project_is_ambiguous(
     monkeypatch.setattr(af, "open_project_stem", ambiguous)
 
     with pytest.raises(SystemExit, match="song_G"):
-        rebuildap.rebuild(transpose=2)
+        rebuildap._transpose_open_project(2, verbose=False)
     assert calls == [], "must not transpose when the target project is unknown"
 
 
@@ -426,7 +415,7 @@ def test_selection_read_failure_exits_pointing_at_force(monkeypatch, tmp_path):
 
     monkeypatch.setattr(af, "transpose_selected_label_track", boom)
     with pytest.raises(SystemExit, match="-f"):
-        rebuildap.rebuild(transpose=2)
+        rebuildap._transpose_open_project(2, verbose=False)
 
 
 # --- outcome reporting ------------------------------------------------------

@@ -610,7 +610,7 @@ def test_quantize_writes_the_versioned_txt_in_cwd_when_it_holds_the_project(
     (tmp_path / "song.aup3").write_text("")  # cwd holds the project
     calls = _stub_quantize(monkeypatch, stem="song", name="chords", content="C\n")
 
-    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+    rb._quantize_open_project(None, verbose=False)
 
     written = tmp_path / "chords_song.txt"
     assert written.read_text() == "C\n"
@@ -633,7 +633,7 @@ def test_quantize_writes_to_the_discovered_project_dir_from_any_cwd(
     calls = _stub_quantize(monkeypatch, stem="song", name="chords", content="C\n")
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [proj])
 
-    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+    rb._quantize_open_project(None, verbose=False)
 
     assert (proj / "chords_song.txt").read_text() == "C\n"
     assert not (cwd / "chords_song.txt").exists()
@@ -651,7 +651,7 @@ def test_quantize_refuses_before_mutating_when_project_dir_unknown(
     calls = _stub_quantize(monkeypatch, stem="song", name="chords")
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
 
-    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+    rb._quantize_open_project(None, verbose=False)
 
     assert calls == [], "must not quantize when it cannot persist the result"
     assert not (tmp_path / "chords_song.txt").exists()
@@ -675,7 +675,7 @@ def test_quantize_refuses_before_mutating_when_the_project_is_ambiguous(
     monkeypatch.setattr(af, "open_project_stem", ambiguous)
 
     with pytest.raises(SystemExit) as excinfo:
-        rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+        rb._quantize_open_project(None, verbose=False)
     assert "song_G" in str(excinfo.value)
     assert calls == [], "must not quantize when the target project is unknown"
 
@@ -695,7 +695,7 @@ def test_quantize_does_not_rewrite_an_already_current_file(
         monkeypatch, name="chords", content="0.000000\t1.000000\tv\n", changed=False
     )
 
-    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+    rb._quantize_open_project(None, verbose=False)
 
     assert existing.read_text() == "0.0\t1.0\tv\n", "equivalent file must be untouched"
     assert "already quantized; nothing to do" in capsys.readouterr().out
@@ -715,7 +715,7 @@ def test_quantize_updates_a_stale_file_even_if_the_track_was_already_quantized(
         monkeypatch, name="chords", content="0.000000\t1.000000\tv\n", changed=False
     )
 
-    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+    rb._quantize_open_project(None, verbose=False)
 
     assert existing.read_text() == "0.000000\t1.000000\tv\n"
     assert "was already quantized; updated its file" in capsys.readouterr().out
@@ -728,7 +728,7 @@ def test_quantize_force_flag_requests_whole_track(monkeypatch, tmp_path):
     (tmp_path / "song.aup3").write_text("")
     calls = _stub_quantize(monkeypatch, name="chords", content="C\n")
 
-    rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False, force=True)
+    rb._quantize_open_project(None, verbose=False, force=True)
 
     assert calls == ["quantized:whole=True"]
 
@@ -747,71 +747,55 @@ def test_selection_read_failure_exits_pointing_at_force(monkeypatch, tmp_path):
     monkeypatch.setattr(af, "quantize_selected_label_track", boom)
 
     with pytest.raises(SystemExit) as excinfo:
-        rb.rebuild(quantize=rb._QUANTIZE_AUTODETECT, verbose=False)
+        rb._quantize_open_project(None, verbose=False)
     assert "-f" in str(excinfo.value)
 
 
-# --- CLI parsing and usage guards -------------------------------------------
+# --- the quantize command ---------------------------------------------------
 
 
-def _captured_rebuild(monkeypatch):
+def _dispatched(monkeypatch, argv):
+    """Run main() on `argv` with the quantize entry point stubbed out."""
+    import sys as _sys
+
     captured = {}
     monkeypatch.setattr(
-        rebuildap, "rebuild", lambda *a, **k: captured.update(kwargs=k, args=a)
+        rebuildap,
+        "_quantize_open_project",
+        lambda *a, **k: captured.update(kwargs=k, args=a),
     )
+    monkeypatch.setattr(_sys, "argv", argv)
+    rebuildap.main()
     return captured
 
 
-def test_bare_q_flag_requests_autodetect(monkeypatch):
-    import sys as _sys
+def test_quantize_without_a_track_name_requests_autodetect(monkeypatch):
+    """No name given -> None, which is what tells the beats track to be found.
 
-    captured = _captured_rebuild(monkeypatch)
-    monkeypatch.setattr(_sys, "argv", ["rebuildap", "-q"])
-    rebuildap.main()
-    assert captured["kwargs"]["quantize"] is rebuildap._QUANTIZE_AUTODETECT
-
-
-def test_q_flag_with_a_name_carries_the_track_name(monkeypatch):
-    import sys as _sys
-
-    captured = _captured_rebuild(monkeypatch)
-    monkeypatch.setattr(_sys, "argv", ["rebuildap", "-q", "beats"])
-    rebuildap.main()
-    assert captured["kwargs"]["quantize"] == "beats"
+    This is where the _QUANTIZE_AUTODETECT sentinel went: it existed only to
+    tell a bare `-q` from no `-q` at all, and running the command *is* now that
+    distinction.
+    """
+    captured = _dispatched(monkeypatch, ["rebuildap", "quantize"])
+    assert captured["kwargs"]["beats_track"] is None
 
 
-def test_no_q_flag_leaves_quantize_off(monkeypatch):
-    import sys as _sys
-
-    captured = _captured_rebuild(monkeypatch)
-    monkeypatch.setattr(_sys, "argv", ["rebuildap"])
-    rebuildap.main()
-    assert captured["kwargs"]["quantize"] is None
+def test_quantize_with_a_name_carries_the_track_name(monkeypatch):
+    captured = _dispatched(monkeypatch, ["rebuildap", "quantize", "beats"])
+    assert captured["kwargs"]["beats_track"] == "beats"
 
 
-def test_q_with_force_is_allowed_and_passes_both(monkeypatch):
-    """-q -f is valid (force = whole track); the guard must not reject it."""
-    import sys as _sys
-
-    captured = _captured_rebuild(monkeypatch)
-    monkeypatch.setattr(_sys, "argv", ["rebuildap", "-q", "-f"])
-    rebuildap.main()
-    assert captured["kwargs"]["quantize"] is rebuildap._QUANTIZE_AUTODETECT
+def test_quantize_with_force_passes_both(monkeypatch):
+    captured = _dispatched(monkeypatch, ["rebuildap", "quantize", "-f"])
+    assert captured["kwargs"]["beats_track"] is None
     assert captured["kwargs"]["force"] is True
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["rebuildap", "song.opus", "-q"],
-        ["rebuildap", "-q", "-c"],
-        ["rebuildap", "-q", "-l"],
-    ],
-)
-def test_quantize_rejects_a_filename_check_or_label(monkeypatch, argv):
+def test_quantize_takes_no_second_positional(monkeypatch):
+    """One reference track, not a list -- an extra word is a typo, not a track."""
     import sys as _sys
 
-    monkeypatch.setattr(_sys, "argv", argv)
+    monkeypatch.setattr(_sys, "argv", ["rebuildap", "quantize", "beats", "extra"])
     with pytest.raises(SystemExit) as excinfo:
         rebuildap.main()
     assert excinfo.value.code != 0

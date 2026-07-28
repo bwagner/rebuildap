@@ -1,7 +1,8 @@
 # rebuildap
 
-Rebuild an [Audacity](https://www.audacityteam.org/) project from your audio file
-plus plain-text label files — so the huge binary `.aup3` never has to live in git.
+Keep your [Audacity](https://www.audacityteam.org/) label tracks in plain text:
+export them, check them against the project, transform them in place, and rebuild
+the whole project from them - so the huge binary `.aup3` never has to live in git.
 
 Audacity `.aup3` files are large. Keep one in a repository and every tweak to a
 label writes a fresh copy of the whole binary. `rebuildap` lets you version the
@@ -21,7 +22,7 @@ parts_mysong.txt
 Build the Audacity project from them:
 
 ```console
-rebuildap mysong.mp3
+rebuildap build mysong.mp3
 ```
 
 You get `mysong.aup3` next to the audio, with `chords` and `parts` as label
@@ -31,7 +32,7 @@ Later, after editing labels in Audacity, check whether the project has drifted
 from the versioned files:
 
 ```console
-rebuildap -c mysong.aup3
+rebuildap check mysong.aup3
 ```
 
 That reports a diff per label track and updates any `.txt` whose content changed.
@@ -52,13 +53,19 @@ and normalized on import; the versioned files are never rewritten. A line that
 fits none of these is rejected up front, naming the file and line
 ([details](docs/label-export.md#importing-labels-normalizing-the-input-format)).
 
-There are three ways to call it:
+There are six commands:
 
-| You pass… | What happens |
+| Command | What happens |
 |---|---|
-| an audio file (`.mp3`, `.wav`, anything Audacity imports) | it's imported, and the matching `*_stem.txt` files become label tracks |
-| an `.aup3` project | its label tracks are exported to individual `.txt` files |
-| nothing | the running Audacity project is used — selected label tracks are exported, or all of them if none are selected |
+| `build AUDIO` | the audio (`.mp3`, `.wav`, anything Audacity imports) is imported, and the matching `*_stem.txt` files become label tracks |
+| `export [AUP3]` | the project's label tracks are exported to individual `.txt` files; with no argument, the running Audacity project's are |
+| `check [AUP3]` | the project's label tracks are compared against the versioned `.txt` files |
+| `import LABELFILE` | one label file is added to the open project as a label track |
+| `quantize [BEATS_TRACK]` | the open project's selected label track is snapped to a beats track, in place |
+| `transpose SEMITONES` | the open project's selected label track has its chords transposed, in place |
+
+`rebuildap` on its own means `rebuildap export`, so the common case stays a
+single word.
 
 With no argument the `.txt` files are written **only into the current
 directory** — these are the versioned source of truth, so they are never
@@ -80,18 +87,18 @@ rebuildap says so instead of guessing. See
 [Which project the exported files are named after](docs/label-export.md#which-project-the-exported-files-are-named-after).
 
 After a rebuild the project is saved as `<audio-stem>.aup3` **beside the audio
-file**, not in the current directory, so `-c` has something to check and a crash
-doesn't cost you the rebuild.
+file**, not in the current directory, so `check` has something to look at and a
+crash doesn't cost you the rebuild.
 
 **An existing `.aup3` is never overwritten.** It's your working copy and may hold
-edits the label files don't have. So rebuilding audio whose `.aup3` is already
+edits the label files don't have. So `build` on audio whose `.aup3` is already
 there stops immediately and tells you, rather than importing everything and
 discarding the result at save time. Move the existing file aside to rebuild, or
 pass `-n` / `--no-save` to rebuild into an unsaved window on purpose.
 
-Saving also nudges the label files' mtimes up to match the new `.aup3`, so `-c`
-doesn't re-diff a project it just built. No label file's *content* is touched —
-[the reasoning is here](docs/label-export.md#why-saving-touches-label-mtimes).
+Saving also nudges the label files' mtimes up to match the new `.aup3`, so
+`check` doesn't re-diff a project it just built. No label file's *content* is
+touched — [the reasoning is here](docs/label-export.md#why-saving-touches-label-mtimes).
 
 Label tracks are exported non-interactively through Audacity's scripting pipe, so
 batch runs never stop for a dialog. There's a small precision trade-off:
@@ -100,71 +107,147 @@ batch runs never stop for a dialog. There's a small precision trade-off:
 ## Usage
 
 ```console
-usage: rebuildap [-h] [-v] [-l] [-c] [-n] [-f] [-q [BEATS_TRACK]]
-                 [-t SEMITONES] [-s] [-V]
-                 [filename]
+usage: rebuildap [-h] [-V] COMMAND ...
 
-rebuild Audacity project
+Keep Audacity label tracks in plain text: export them, check them
+against the project, transform them in place, and rebuild the whole
+project from them.
 
 positional arguments:
-  filename              Audio to rebuild a project from, or an .aup3 to export
-                        labels from. Omit to export the open Audacity
-                        project's labels (see Input modes below).
+  COMMAND
+    build        Rebuild a project from an audio file and its label files.
+    export       Export label tracks to versioned .txt files.
+    check        Compare a project's label tracks with the versioned .txt
+                 files.
+    import       Import a label file into the open project as a label track.
+    quantize     Snap the selected label track to a beats track, in place.
+    transpose    Transpose the selected label track's chords, in place.
 
 options:
-  -h, --help            show this help message and exit
-  -v, --verbose         Enable verbose mode.
-  -l, --label           Import label file.
-  -c, --check           Check whether Audacity file is newer than label files
-                        and show differences. Audacity is opened only when
-                        some label file is older than the .aup3; every label
-                        file is then compared. With -f, open even when all of
-                        them are newer - opens Audacity every run, and catches
-                        label files rewritten (by e.g. git checkout, touch)
-                        without changing the project.
-  -n, --no-save         Don't save the rebuilt project as <audio-stem>.aup3
-                        beside the audio file. By default it is saved when no
-                        .aup3 exists yet; an existing one is never
-                        overwritten.
-  -f, --force           Force. What it overrides depends on the mode - see -c,
-                        -q, -t and "Input modes" below. Never overrides the
-                        never-overwrite rule for an existing .aup3.
-  -q, --quantize [BEATS_TRACK]
-                        Quantize the selected label track in the open project
-                        to a beats label track already in it, in place: its
-                        label boundaries snap to the beats grid, the track is
-                        re-imported at its original position, and its
-                        versioned .txt is updated to match. Give a track name
-                        to pick the reference, or omit it to auto-detect it:
-                        the sole label track whose name starts with 'beat'
-                        (case-insensitive). When a time selection is active,
-                        only the boundaries inside it are snapped; -f always
-                        quantizes the whole track.
-  -t, --transpose SEMITONES
-                        Transpose the chords in the selected label track of
-                        the open project by SEMITONES half steps (negative
-                        transposes down), in place, and update its versioned
-                        .txt to match. Label text that is not a chord (section
-                        markers, lyric cues, fingerings) is left alone and
-                        reported. Chords are spelled with flats unless -s is
-                        given. When a time selection is active, only the
-                        labels starting inside it are transposed; -f always
-                        transposes the whole track.
-  -s, --sharps          With -t, spell transposed chords with sharps (A#)
-                        instead of the default flats (Bb).
-  -V, --version         show program's version number and exit
+  -h, --help     show this help message and exit
+  -V, --version  show program's version number and exit
 
-Input modes:
-  audio file   imported; matching *_<stem>.txt become label tracks
-  .aup3        its label tracks are exported to .txt files
-  (nothing)    the open Audacity project is used - selected label
-               tracks are exported, or all of them if none are
-               selected; with -f, into the current directory even
-               when the project appears to live elsewhere
+Run `rebuildap COMMAND --help` for a command's own options.
 
-Transform modes (-q, -t) take no filename: they rewrite the selected
-label track of the open project in place and update its versioned
-.txt. One at a time.
+`rebuildap` on its own means `rebuildap export`: the open project's
+label tracks are written into the current directory - the selected
+ones, or all of them if none are selected.
+```
+
+Each command's own options:
+
+```console
+usage: rebuildap build [-h] [-v] [-n] AUDIO
+
+Import AUDIO into a new Audacity project, turning every *_<stem>.txt file
+beside it into a label track, and save the result as <stem>.aup3 next to the
+audio.
+
+positional arguments:
+  AUDIO          Audio file to rebuild from (.mp3, .wav, anything Audacity
+                 imports). Every *_<stem>.txt beside it becomes a label track.
+
+options:
+  -h, --help     show this help message and exit
+  -v, --verbose  Enable verbose mode.
+  -n, --no-save  Don't save the rebuilt project as <audio-stem>.aup3 beside
+                 the audio file. By default it is saved when no .aup3 exists
+                 yet; an existing one is never overwritten.
+```
+
+```console
+usage: rebuildap export [-h] [-v] [-f] [AUP3]
+
+Write label tracks out as the versioned *_<stem>.txt files, named after the
+project's .aup3 stem. With AUP3 they land beside that file; with no argument
+the open project is used and they land in the current directory, which is
+where these source-of-truth files belong.
+
+positional arguments:
+  AUP3           Project whose label tracks to export. Omit to export the open
+                 Audacity project's - the selected tracks, or all of them if
+                 none are selected.
+
+options:
+  -h, --help     show this help message and exit
+  -v, --verbose  Enable verbose mode.
+  -f, --force    Export the open project into the current directory even when
+                 it appears to live elsewhere. Applies only without AUP3,
+                 which exports beside itself.
+```
+
+```console
+usage: rebuildap check [-h] [-v] [-f] [AUP3]
+
+Report where the project and its versioned label files have diverged, and
+update any .txt whose content changed. Label tracks that exist only in
+Audacity are flagged too.
+
+positional arguments:
+  AUP3           Project to check. Omit to use the sole .aup3 in the current
+                 directory.
+
+options:
+  -h, --help     show this help message and exit
+  -v, --verbose  Enable verbose mode.
+  -f, --force    Open Audacity and compare every label file even when all of
+                 them are newer than the .aup3. Opens Audacity every run, and
+                 catches label files rewritten (by e.g. git checkout, touch)
+                 without changing the project.
+```
+
+```console
+usage: rebuildap import [-h] [-v] LABELFILE
+
+Add LABELFILE to the open Audacity project as a label track. The file may be
+1-, 2- or 3-column; it is normalized on import and never rewritten.
+
+positional arguments:
+  LABELFILE      Label file to import; its <name>_<stem>.txt prefix names the
+                 track.
+
+options:
+  -h, --help     show this help message and exit
+  -v, --verbose  Enable verbose mode.
+```
+
+```console
+usage: rebuildap quantize [-h] [-v] [-f] [BEATS_TRACK]
+
+Snap the selected label track's boundaries to a beats label track already in
+the open project, re-import it at its original position, and update its
+versioned .txt to match.
+
+positional arguments:
+  BEATS_TRACK    Label track to snap to. Omit to auto-detect it: the sole
+                 label track whose name starts with 'beat' (case-insensitive).
+
+options:
+  -h, --help     show this help message and exit
+  -v, --verbose  Enable verbose mode.
+  -f, --force    Quantize the whole track without reading the time selection.
+                 By default only the boundaries inside an active selection are
+                 snapped.
+```
+
+```console
+usage: rebuildap transpose [-h] [-v] [-s] [-f] SEMITONES
+
+Transpose the chords in the open project's selected label track by SEMITONES
+half steps and update its versioned .txt to match. Label text that is not a
+chord (section markers, lyric cues, fingerings) is left alone and reported.
+
+positional arguments:
+  SEMITONES      Half steps to transpose by; negative transposes down.
+
+options:
+  -h, --help     show this help message and exit
+  -v, --verbose  Enable verbose mode.
+  -s, --sharps   Spell transposed chords with sharps (A#) instead of the
+                 default flats (Bb).
+  -f, --force    Transpose the whole track without reading the time selection.
+                 By default only the labels starting inside an active
+                 selection are transposed.
 ```
 
 ## Prerequisites
@@ -181,9 +264,9 @@ label track of the open project in place and update its versioned
   if [audacity#7171](https://github.com/audacity/audacity/issues/7171) ever lands,
   the plug-in becomes unnecessary.
 - [uv](https://docs.astral.sh/uv/)
-- For `-q` only: [quantize_labels](https://github.com/bwagner/quantize_labels)
+- For `quantize` only: [quantize_labels](https://github.com/bwagner/quantize_labels)
   on your `$PATH` (as `quantize_labels.py` or `quantize_labels`), which does the
-  snapping. `-t` needs nothing extra — its sister
+  snapping. `transpose` needs nothing extra — its sister
   [transpose](https://github.com/bwagner/transpose) is a declared dependency and
   is installed with `rebuildap`.
 
@@ -257,9 +340,9 @@ them and needs a GUI login session.
 - [audacity_click_label](https://github.com/bwagner/audacity_click_label)
 - [audacity_shift_labels](https://github.com/bwagner/audacity_shift_labels)
 - [quantize_labels](https://github.com/bwagner/quantize_labels) — does the
-  snapping behind `-q`
+  snapping behind `quantize`
 - [transpose](https://github.com/bwagner/transpose) — does the chord
-  transposition behind `-t`
+  transposition behind `transpose`
 - [beats2bars](https://github.com/bwagner/beats2bars)
 - [audacity_legatize](https://github.com/bwagner/audacity_legatize)
 - [pyaudacity](https://github.com/bwagner/pyaudacity)

@@ -63,7 +63,7 @@ These shape most decisions here and are not obvious from the code.
   *editing* an aup3 - even an edit you then undo - that bumps its mtime, because
   Audacity writes edits to the file before you Save (Audacity issue #9161).
   Merely *opening and closing* one does not, and neither does a read-only
-  `GetInfo` (the deep-check path, `-c -d`): confirmed 2026-07-21, both an
+  `GetInfo` (the deep-check path, `check -f`): confirmed 2026-07-21, both an
   open+close and an open -> `GetInfo` -> close left the mtime byte-identical.
 
 ## Project memory

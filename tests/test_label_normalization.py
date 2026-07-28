@@ -198,7 +198,7 @@ def test_rebuild_bails_before_starting_audacity_on_bad_label(tmp_path, monkeypat
     import rebuildap as ra
 
     with pytest.raises(SystemExit) as excinfo:
-        ra.rebuild(str(audio), verbose=False, save=True)
+        ra._build_project(str(audio), verbose=False, save=True)
     # Clean message naming the file, and Audacity was never started.
     assert "beats_song.txt" in str(excinfo.value)
     assert started == []
