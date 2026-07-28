@@ -30,7 +30,7 @@ def test_resolves_the_sole_selected_label_track():
     assert af.resolve_selected_label_track(tracks) == (1, "chords")
 
 
-def test_a_selected_wave_track_does_not_count_as_the_target():
+def test_a_selected_audio_track_does_not_count_as_the_target():
     """Only *label* tracks are candidates -- a selected audio track is not one."""
     tracks = [_track("song", kind="wave", selected=True), _track("chords")]
     with pytest.raises(af.LabelTrackError, match="none is selected"):

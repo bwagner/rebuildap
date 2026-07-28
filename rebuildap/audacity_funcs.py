@@ -957,18 +957,21 @@ def dir_holds_project(directory: Path, stem: str) -> bool:
     return any(directory.glob(f"*_{stem}.txt"))
 
 
-def open_project_wave_stem(tracks: Optional[List[dict]] = None) -> str:
-    """The open project's stem: the name of its first wave track.
+def open_project_audio_stem(tracks: Optional[List[dict]] = None) -> str:
+    """The open project's stem: the name of its first audio track.
 
     Fetches tracks via GetInfo unless an already-fetched list is passed, letting
     a caller that has them avoid a second round-trip.
+
+    ("audio track" is this codebase's word for it; Audacity's own payload calls
+    the kind ``wave``, which is what :data:`KIND_AUDIO` holds.)
     """
     if tracks is None:
         tracks = _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
-    wave = next((t for t in tracks if t.get("kind") == "wave"), None)
-    if wave is None:
-        raise RuntimeError("Cannot derive output context: no wave track in project")
-    return wave["name"]
+    audio = next((t for t in tracks if t.get(PROPERTY_KIND) == KIND_AUDIO), None)
+    if audio is None:
+        raise RuntimeError("Cannot derive output context: no audio track in project")
+    return audio["name"]
 
 
 def find_recent_project_dirs(stem: str) -> List[Path]:
@@ -1033,9 +1036,9 @@ def open_project_stem() -> str:
     """The open project's identity: the stem of its ``.aup3`` file.
 
     This is what names the versioned ``<track>_<stem>.txt`` files, so it must be
-    the *project file's* stem and not its wave track's name. The two differ
+    the *project file's* stem and not its audio track's name. The two differ
     whenever a project was made by Save-As from another one: a transposed
-    variant ``song_G.aup3`` keeps the wave track called ``song``, and naming by
+    variant ``song_G.aup3`` keeps the audio track called ``song``, and naming by
     the track wrote the variant's labels over the original's files.
 
     With several projects open, the **frontmost** one wins: measured on 3.7.8
@@ -1045,10 +1048,10 @@ def open_project_stem() -> str:
     applied -- something other than a project is frontmost (a modal dialog, the
     About box), or the front window cannot be read at all.
 
-    Falls back to :func:`open_project_wave_stem` when no open window matches a
+    Falls back to :func:`open_project_audio_stem` when no open window matches a
     file on disk -- a never-saved project has no ``.aup3`` stem to find, and
     blocking its export would be worse than naming it after its audio -- but
-    says so on stderr, since a silent fallback is exactly how the wave-track
+    says so on stderr, since a silent fallback is exactly how the audio-track
     name came to be used unnoticed.
     """
     from . import audacity_present as ap  # deferred: audacity_present imports us
@@ -1071,7 +1074,7 @@ def open_project_stem() -> str:
             f"them, so it is unclear which these commands apply to:\n{listed}\n"
             "Bring the project you mean to the front, then run rebuildap again."
         )
-    stem = open_project_wave_stem()
+    stem = open_project_audio_stem()
     print(
         f"Could not identify the open project's .aup3 file, so its label files "
         f"will be named after its audio track ('{stem}'). This is right for a "
@@ -1378,7 +1381,7 @@ def quantize_selected_label_track(
     header for the flow.
 
     The project stem is deliberately *not* returned: it is the caller's business
-    (see :func:`open_project_stem`), and deriving it here from the wave track was
+    (see :func:`open_project_stem`), and deriving it here from the audio track was
     how a transposed variant came to overwrite its original's label files.
 
     **Selection scope.** With ``whole_track`` false (the default), only label

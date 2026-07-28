@@ -6,13 +6,13 @@ Back to the [README](../README.md).
 ## Which project the exported files are named after
 
 A label file is named `<track>_<stem>.txt`, and `<stem>` is the open project's
-**`.aup3` filename stem** - not the name of its wave track.
+**`.aup3` filename stem** - not the name of its audio track.
 
 The two are usually the same, because a project rebuilt from `song.opus` is
-saved as `song.aup3` and its wave track is called `song`. They come apart as
+saved as `song.aup3` and its audio track is called `song`. They come apart as
 soon as a project is copied: Save-As on `song.aup3` produces `song_G.aup3` whose
-wave track is *still* called `song`. This is the normal way to keep a transposed
-variant beside its original, and naming by the wave track made the variant write
+audio track is *still* called `song`. This is the normal way to keep a transposed
+variant beside its original, and naming by the audio track made the variant write
 its labels straight over the original's files.
 
 Audacity has no query for "which file is this project?" - `AXDocument` is
@@ -52,7 +52,7 @@ prints the full path it wrote, so a mis-targeted run is visible in its own
 output rather than silent.
 
 When it yields **nothing** - a never-saved project, or one evicted from Open
-Recent - it falls back to the wave track's name and says so on stderr. A
+Recent - it falls back to the audio track's name and says so on stderr. A
 never-saved project has no `.aup3` stem to find, and refusing to export it would
 be worse than naming it after its audio; announcing it is what keeps the
 fallback from going unnoticed, as the old unconditional behaviour did.

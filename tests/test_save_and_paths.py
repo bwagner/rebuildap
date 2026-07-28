@@ -614,25 +614,25 @@ def test_find_recent_project_dirs_no_stem_match(tmp_path, monkeypatch):
 # --- open_project_stem (the open project's identity) ----------------------
 #
 # The stem that names the versioned .txt files is the open project's *.aup3*
-# stem, not its wave track's name. The two differ whenever a project was made by
+# stem, not its audio track's name. The two differ whenever a project was made by
 # Save-As from another one -- a transposed variant `<stem>_G.aup3` keeps the
-# original's wave track name, so naming by the wave track wrote the variant's
+# original's audio track name, so naming by the audio track wrote the variant's
 # labels over the original's files.
 
 _UNSET = object()  # "the test did not say", distinct from an explicit None
 
 
 def _stub_identity(
-    monkeypatch, titles, recent_paths, wave_stem="song", frontmost=_UNSET
+    monkeypatch, titles, recent_paths, audio_stem="song", frontmost=_UNSET
 ):
     """Fake the routes open_project_stem uses: the two it intersects, the
-    frontmost-window tiebreaker, and the wave-stem fallback.
+    frontmost-window tiebreaker, and the audio-stem fallback.
 
     ``frontmost`` defaults to the first title, since the common case is one
     project window that is also the front one."""
     monkeypatch.setattr(ap, "audacity_window_names", lambda: list(titles))
     monkeypatch.setattr(af.pa, "do", lambda cmd: _menus_with(recent_paths))
-    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: wave_stem)
+    monkeypatch.setattr(af, "open_project_audio_stem", lambda *a, **k: audio_stem)
     if frontmost is _UNSET:
         frontmost = titles[0] if titles else None
     monkeypatch.setattr(ap, "frontmost_audacity_window_name", lambda: frontmost)
@@ -651,13 +651,13 @@ def test_open_project_stem_uses_the_open_windows_aup3_stem(tmp_path, monkeypatch
     assert af.open_project_stem() == "song"
 
 
-def test_open_project_stem_prefers_aup3_stem_over_wave_track_name(
+def test_open_project_stem_prefers_aup3_stem_over_audio_track_name(
     tmp_path, monkeypatch
 ):
     """The regression this whole change is about: a `_G` variant must not be
-    named after the wave track it inherited from the project it was copied from."""
+    named after the audio track it inherited from the project it was copied from."""
     variant = _make_project(tmp_path, "song_G")
-    _stub_identity(monkeypatch, ["song_G"], [str(variant)], wave_stem="song")
+    _stub_identity(monkeypatch, ["song_G"], [str(variant)], audio_stem="song")
     assert af.open_project_stem() == "song_G"
 
 
@@ -747,16 +747,16 @@ def test_open_project_stem_ignores_recent_projects_that_are_not_open(
 
 def test_open_project_stem_skips_recent_entries_gone_from_disk(tmp_path, monkeypatch):
     ghost = tmp_path / "gone" / "song_G.aup3"  # never created
-    _stub_identity(monkeypatch, ["song_G"], [str(ghost)], wave_stem="song")
+    _stub_identity(monkeypatch, ["song_G"], [str(ghost)], audio_stem="song")
     assert af.open_project_stem() == "song"
 
 
-def test_open_project_stem_falls_back_to_wave_stem_and_says_so(
+def test_open_project_stem_falls_back_to_audio_stem_and_says_so(
     tmp_path, monkeypatch, capsys
 ):
     """An unsaved project has no .aup3 stem to find; keep exporting rather than
     blocking, but never do it silently -- the announced name is the whole point."""
-    _stub_identity(monkeypatch, ["song"], [], wave_stem="song")
+    _stub_identity(monkeypatch, ["song"], [], audio_stem="song")
     assert af.open_project_stem() == "song"
     err = capsys.readouterr().err
     assert "song" in err
@@ -768,7 +768,7 @@ def test_open_project_stem_falls_back_when_the_menu_query_fails(monkeypatch, cap
 
     monkeypatch.setattr(ap, "audacity_window_names", lambda: ["song"])
     monkeypatch.setattr(af.pa, "do", boom)
-    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: "song")
+    monkeypatch.setattr(af, "open_project_audio_stem", lambda *a, **k: "song")
     assert af.open_project_stem() == "song"
     assert capsys.readouterr().err
 
@@ -779,7 +779,7 @@ def test_open_project_stem_falls_back_when_windows_cannot_be_listed(
     """audacity_window_names() returns [] for an Accessibility refusal as well as
     for "no windows", so an empty title list must not resolve to anything."""
     proj = _make_project(tmp_path, "song_G")
-    _stub_identity(monkeypatch, [], [str(proj)], wave_stem="song")
+    _stub_identity(monkeypatch, [], [str(proj)], audio_stem="song")
     assert af.open_project_stem() == "song"
 
 
@@ -806,14 +806,14 @@ def test_resolve_output_context_takes_an_already_resolved_stem(tmp_path, monkeyp
     assert af._resolve_output_context(None, "song_G") == (tmp_path, "song_G")
 
 
-def test_exported_filenames_carry_the_aup3_stem_not_the_wave_track_name(
+def test_exported_filenames_carry_the_aup3_stem_not_the_audio_track_name(
     tmp_path, monkeypatch
 ):
     """End to end over the naming path: the `_G` variant writes
     `chords_song_G.txt`, not over the original's `chords_song.txt`."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(af, "open_project_stem", lambda: "song_G")
-    monkeypatch.setattr(af, "open_project_wave_stem", lambda *a, **k: "song")
+    monkeypatch.setattr(af, "open_project_audio_stem", lambda *a, **k: "song")
     labels = '\n[ [1, [[1.35, 2.83, "C7"]]] ]\nBatchCommand finished: OK\n'
     tracks = (
         '\n[ { "name":"song", "kind":"wave" },\n'

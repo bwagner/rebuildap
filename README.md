@@ -73,7 +73,7 @@ visible.
 
 The files are named after the open project's **`.aup3` stem**, so a transposed
 copy `song_G.aup3` writes `chords_song_G.txt` and never touches the original's
-`chords_song.txt` - even though both projects share a wave track called `song`.
+`chords_song.txt` - even though both projects share a audio track called `song`.
 With several projects open the **frontmost** one is used, which is also the one
 Audacity's scripting pipe acts on; if something other than a project is in front,
 rebuildap says so instead of guessing. See
