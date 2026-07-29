@@ -54,6 +54,15 @@ local REFOCUS_DELAY = 0.3
 local NOTIFY_WITHDRAW_AFTER = 20
 local CHOOSER_ROWS = 8
 
+-- A failed run also gets an on-screen alert, not just a notification. hs.alert is
+-- drawn by Hammerspoon itself, so it survives macOS suppressing notifications - which
+-- happens for every app whenever the system considers the display shared, and did so
+-- unnoticed for hours on 2026-07-29 (see ~/.claude/macos-notifications.md). Without
+-- it, a failed run and a successful one look identical: both show only the start
+-- alert. Success stays notification-only; an alert per success would be noise.
+local FAILURE_ALERT_SECONDS = 6
+local FAILURE_ALERT_MAX_CHARS = 120
+
 M.binary = nil
 M.pathEntries = nil
 M.logFile = HOME .. "/.hammerspoon/rebuildap.log"
@@ -85,6 +94,25 @@ local function environment()
   end
   for _, dir in ipairs(SYSTEM_PATH_ENTRIES) do entries[#entries + 1] = dir end
   return {PATH = table.concat(entries, ":"), HOME = HOME}
+end
+
+--- First non-empty line of `text`, trimmed and truncated.
+--- rebuildap's *runtime* failures lead with the actionable sentence ("Select exactly
+--- one label track; none is selected."), which is what a hotkey run can actually hit.
+--- An argparse failure leads with a usage dump instead, but a binding passes fixed
+--- arguments, so that case does not arise from a keypress. The full output goes to the
+--- log and the notification either way; an alert is the wrong place for it.
+local function firstLine(text)
+  for line in (text or ""):gmatch("[^\r\n]+") do
+    local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if trimmed ~= "" then
+      if #trimmed > FAILURE_ALERT_MAX_CHARS then
+        trimmed = trimmed:sub(1, FAILURE_ALERT_MAX_CHARS) .. "..."
+      end
+      return trimmed
+    end
+  end
+  return "(no output)"
 end
 
 local function report(title, text)
@@ -132,7 +160,9 @@ function M.exec(args)
     if rc == 0 then
       report("rebuildap " .. label .. " - ok", body)
     else
-      report("rebuildap " .. label .. " - failed (exit " .. tostring(rc) .. ")", body)
+      local title = "rebuildap " .. label .. " - failed (exit " .. tostring(rc) .. ")"
+      report(title, body)
+      hs.alert.show(title .. "\n" .. firstLine(body), FAILURE_ALERT_SECONDS)
     end
   end, args)
   task:setEnvironment(environment())

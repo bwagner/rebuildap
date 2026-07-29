@@ -128,8 +128,8 @@ for what I typed" rather than a fixed interval.
 ## Verify
 
 Open a project, select one label track and drag out a time region, then press the
-shortcut. You should see a brief on-screen alert, then a notification with the
-result. Either way it is appended to `~/.hammerspoon/rebuildap.log`:
+shortcut. You should see a brief on-screen alert as it starts, then a notification with
+the result. Either way it is appended to `~/.hammerspoon/rebuildap.log`:
 
 ```
 2026-07-28 23:47:47  rebuildap quantize - ok
@@ -139,6 +139,23 @@ Label track 'chords' was already quantized; updated its file:
 
 Nothing visible happens *in Audacity* when the command is a no-op, so check the
 log rather than the window.
+
+**The log is authoritative, not the notification.** macOS silences notifications from
+*every* app whenever it considers the display shared - measured 2026-07-29, where they
+were delivered to Notification Center but never shown, for hours, unnoticed. If results
+never appear, that is a system setting (*Allow notifications when mirroring or sharing
+the display*), not a rebuildap fault.
+
+A **failure** therefore also gets its own on-screen alert, naming the exit code and the
+first line of output, which `hs.alert` draws directly and so survives that suppression:
+
+```
+rebuildap quantize - failed (exit 1)
+Select exactly one label track; 2 are selected (parts, chords).
+```
+
+Success stays notification-and-log only - an alert per successful run would be noise,
+and a run that quietly did nothing is the case the log exists for.
 
 ## No time region? It just does the whole track
 
