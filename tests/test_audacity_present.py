@@ -412,3 +412,90 @@ def test_watcher_stops_after_the_block_exits(monkeypatch):
     time.sleep(0.1)
 
     assert len(polls) == after_exit
+
+
+# --- the no-region dialog (NyquistPrompt's refusal) --------------------------
+#
+# A NyquistPrompt sent with no time region raises a modal instead of answering,
+# wedging the pipe. Measured 2026-07-29: the refusal is survivable and the pipe
+# recovers fully, provided the client does NOT hang up first -- so this dialog is
+# detected, dismissed, and read as "there is no region".
+
+NO_REGION_STATIC_TEXTS = (
+    'Message, "Nyquist Prompt" requires one or more tracks to be selected., OK'
+)
+
+
+def test_no_region_dialog_detected_from_static_text(monkeypatch):
+    _fake_osascript(monkeypatch, stdout=NO_REGION_STATIC_TEXTS)
+    assert ap.no_region_dialog_present()
+
+
+def test_upgrade_dialog_is_not_mistaken_for_the_no_region_dialog(monkeypatch):
+    """Each dialog gets its own matcher; only one of them is safe to click."""
+    _fake_osascript(monkeypatch, stdout=UPGRADE_STATIC_TEXTS)
+    assert not ap.no_region_dialog_present()
+
+
+def test_already_open_alert_is_not_mistaken_for_the_no_region_dialog(monkeypatch):
+    """The 'already open' alert must never be clicked -- see CLAUDE.md."""
+    _fake_osascript(monkeypatch, stdout=OTHER_DIALOG_STATIC_TEXTS)
+    assert not ap.no_region_dialog_present()
+
+
+def test_no_dialog_means_no_region_dialog_absent(monkeypatch):
+    _fake_osascript(monkeypatch, stdout="")
+    assert not ap.no_region_dialog_present()
+
+
+def test_no_region_probe_is_silent_when_osascript_fails(monkeypatch, capsys):
+    _fake_osascript(monkeypatch, returncode=1, stderr="Can't get process Audacity")
+    assert not ap.no_region_dialog_present()
+    assert capsys.readouterr().err == ""
+
+
+def test_dismiss_no_region_reports_true_only_when_clicked(monkeypatch):
+    _fake_osascript(monkeypatch, stdout="dismissed")
+    assert ap.dismiss_no_region_dialog()
+    _fake_osascript(monkeypatch, stdout="none")
+    assert not ap.dismiss_no_region_dialog()
+
+
+def test_no_region_watcher_dismisses_dialog_that_appears_mid_flight(monkeypatch):
+    """The refusal only shows up once the read is already in flight."""
+    state = {"polls": 0, "clicked": False}
+
+    def present():
+        state["polls"] += 1
+        return state["polls"] >= 2 and not state["clicked"]
+
+    def dismiss():
+        state["clicked"] = True
+        return True
+
+    monkeypatch.setattr(ap, "no_region_dialog_present", present)
+    monkeypatch.setattr(ap, "dismiss_no_region_dialog", dismiss)
+    monkeypatch.setattr(ap, "NO_REGION_DIALOG_POLL", 0.01)
+
+    with ap.dismissing_no_region_dialog() as dismissed:
+        deadline = time.monotonic() + 2
+        while not dismissed.is_set() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    assert state["clicked"]
+    assert dismissed.is_set()
+
+
+def test_no_region_watcher_clicks_nothing_when_no_dialog_appears(monkeypatch):
+    clicks = []
+    monkeypatch.setattr(ap, "no_region_dialog_present", lambda: False)
+    monkeypatch.setattr(
+        ap, "dismiss_no_region_dialog", lambda: clicks.append(1) or True
+    )
+    monkeypatch.setattr(ap, "NO_REGION_DIALOG_POLL", 0.01)
+
+    with ap.dismissing_no_region_dialog() as dismissed:
+        time.sleep(0.05)
+
+    assert clicks == []
+    assert not dismissed.is_set()

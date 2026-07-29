@@ -140,24 +140,25 @@ Label track 'chords' was already quantized; updated its file:
 Nothing visible happens *in Audacity* when the command is a no-op, so check the
 log rather than the window.
 
-## Select a time region first
+## No time region? It just does the whole track
 
-**A selected label track is not enough.** With no time region, `quantize` and
-`transpose` raise a modal dialog inside Audacity:
+**A selected label track with no time region is fine.** `quantize` and `transpose`
+read the selection through Nyquist, which refuses a zero-length one with a modal:
 
 > "Nyquist Prompt" requires one or more tracks to be selected.
 
-The message blames track selection, but the missing thing is the *region*: these
-commands read the selection through Nyquist, which refuses a zero-length one.
-Measured on 3.7.8 - audio track selected plus a label track but no region raises
-the dialog, while the same project with a region returns the selection cleanly.
+The message blames track selection, but the missing thing is the *region* - measured
+on 3.7.8, only label tracks selected, a region reads cleanly and no region raises this.
+You reach that state by clicking inside a label track past its last label; clicking the
+track's *header* always selects `first-label-start .. last-label-end`, so that gesture
+never produces it.
 
-That dialog **blocks the scripting pipe**, so the command hangs, and dismissing it
-can take Audacity down with it. From a terminal you would see the hang; from a
-hotkey there is nothing to notice but a dialog you have to go and find.
+rebuildap clears the dialog itself, within about a fifth of a second, and reads the
+refusal as its answer: no region means the whole track. There is nothing to notice and
+nothing to dismiss. This used to hang the command for 15s and could take Audacity down -
+see `docs/audacity-quirks.md` for why the dismissal was never the dangerous part.
 
-Either mark a region before pressing the shortcut, or bind `{"quantize", "-f"}`,
-which skips the selection read and always acts on the whole track.
+`-f` still skips the selection read altogether if you want to be explicit about it.
 
 ## Gotchas
 

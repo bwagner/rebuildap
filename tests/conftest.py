@@ -21,6 +21,13 @@ The blocked names are the places where this package actually reaches out:
 - ``subprocess.run``         — every AppleScript / GUI keystroke goes through
                                ``run_osascript`` -> here, as does the
                                quantize_labels shell-out
+- ``_dismissing_no_region_dialog`` — replaced by an idle stand-in rather than
+                               blocked. It is a *background watcher*: blocking it
+                               would raise inside a daemon thread, where pytest can
+                               only report an unhandled-thread warning that names
+                               no test. An idle watcher keeps the default "no
+                               dialog appeared" path, which is what every test that
+                               is not about the watcher expects.
 
 ``run_osascript`` itself is deliberately *not* blocked: several tests unit-test its
 own logic (splitting, stripping, the Accessibility hint) with ``subprocess.run``
@@ -31,6 +38,8 @@ are deselected by default (``addopts = "-m 'not audacity'"``).
 """
 
 import subprocess
+import threading
+from contextlib import contextmanager
 
 import pytest
 
@@ -38,6 +47,12 @@ from rebuildap import audacity_funcs as af
 from rebuildap import audacity_present as ap
 
 AUDACITY_MARKER = "audacity"
+
+
+@contextmanager
+def _idle_watcher():
+    """Stand-in for the no-region dialog watcher: nothing ever appears."""
+    yield threading.Event()
 
 
 def _forbidden(what):
@@ -71,3 +86,6 @@ def no_live_audacity(request, monkeypatch):
     # Beneath osascript and the quantize_labels shell-out. Tests that legitimately
     # fake a subprocess call patch it again in their own body, which wins.
     monkeypatch.setattr(subprocess, "run", _forbidden("subprocess.run"))
+    # A watcher thread cannot be *blocked* usefully - it would raise where only
+    # an unnamed thread warning surfaces - so it is stubbed idle instead.
+    monkeypatch.setattr(af, "_dismissing_no_region_dialog", _idle_watcher)

@@ -234,6 +234,10 @@ _NY_SELECTION_TEMPLATE = (
 _SELECTION_READ_TIMEOUT = 15.0
 # Selection narrower than this (a bare cursor) counts as "no region" -> whole track.
 _NO_REGION_EPSILON = 1e-6
+# Pause after clicking NyquistPrompt's refusal away, before using the pipe again.
+# Measured 2026-07-29: the dialog was gone by the first 0.5s poll after the click,
+# and a GetInfo round-trip in the same process succeeded immediately afterwards.
+_NO_REGION_DIALOG_SETTLE = 0.5
 # How far off an edge a boundary may sit and still count as on it.
 #
 # The selection and the label times are two *independently rounded* views of the
@@ -1247,17 +1251,86 @@ def resolve_selected_label_track(tracks: List[Dict]) -> Tuple[int, str]:
     return index, track[PROPERTY_NAME]
 
 
+def _no_region_dialog_present() -> bool:
+    """Whether NyquistPrompt's "no time region" refusal is on screen."""
+    from . import audacity_present as ap  # deferred: audacity_present imports us
+
+    return ap.no_region_dialog_present()
+
+
+def _dismiss_no_region_dialog() -> bool:
+    """Clear NyquistPrompt's refusal, returning whether one was dismissed."""
+    from . import audacity_present as ap  # deferred: audacity_present imports us
+
+    return ap.dismiss_no_region_dialog()
+
+
+def _dismissing_no_region_dialog():
+    """Context manager clearing NyquistPrompt's refusal while the read is in flight."""
+    from . import audacity_present as ap  # deferred: audacity_present imports us
+
+    return ap.dismissing_no_region_dialog()
+
+
 def resolve_selection_scope(whole_track: bool = False) -> Optional[Tuple[float, float]]:
     """The time selection to scope a transform to, or ``None`` for the whole track.
 
     ``None`` when ``whole_track`` is set (from ``-f``, which also skips the read
-    entirely) or when the selection is a bare cursor rather than a region. May
-    raise :class:`SelectionReadError`; callers resolve this *before* touching the
-    project so a read failure aborts cleanly rather than half-way through.
+    entirely), when the selection is a bare cursor rather than a region, or when
+    Nyquist *refused* to answer because there is no region at all.
+
+    That last case is why this function catches ``TimeoutError``. There is no way
+    to ask Audacity whether a region exists: ``GetInfo`` has no selection type,
+    ``Type=Menus`` is a static table, the Selection Toolbar's fields are
+    custom-drawn with no Accessibility value, and menu/button ``AXEnabled`` does
+    not move with the region -- all measured 2026-07-29. So the question is asked
+    the only way it can be, by sending the read, and the *refusal is the answer*:
+    NyquistPrompt raising its modal means there is no region.
+
+    **Letting the timeout unwind the process is the actual hazard.** Audacity has
+    died five times on this path, and the cause is the client closing the FIFO
+    while the modal is still open -- not the dismissal, which was measured
+    survivable both by hand and programmatically. So the modal is cleared here,
+    in-process, before returning; the same process then keeps using the pipe
+    normally (verified live, no drain required).
+
+    Anything other than our own dialog is refused rather than clicked, and a
+    dialog that will not clear is an error, not a whole-track run: the pipe is
+    still wedged and proceeding would act on a project we can no longer talk to.
+    Callers resolve scope *before* touching the project, so either raise aborts
+    cleanly rather than half-way through.
     """
     if whole_track:
         return None
-    selection = read_time_selection()
+    with _dismissing_no_region_dialog() as refused:
+        try:
+            selection = read_time_selection()
+        except (TimeoutError, SelectionReadError) as e:
+            if refused.is_set():
+                return None  # the refusal means: no region -> whole track
+            if isinstance(e, SelectionReadError):
+                raise  # a real parse failure, unrelated to the modal
+            # A timeout with the watcher idle: the dialog may have arrived just
+            # after it gave up. Check once more before deciding, since going
+            # whole-track on a wrong guess edits labels the user did not select.
+            if not _no_region_dialog_present():
+                raise SelectionReadError(
+                    "The selection read did not return and no dialog of ours is "
+                    "up. Audacity may be showing another modal - do not dismiss "
+                    "it while a command is in flight. Re-run with -f to skip the "
+                    "read."
+                ) from e
+            if not _dismiss_no_region_dialog():
+                raise SelectionReadError(
+                    "Audacity is refusing the selection read (no time region) and "
+                    "its dialog could not be dismissed. Clear it by hand, then "
+                    "re-run - or re-run with -f, which skips the read entirely."
+                ) from e
+            time.sleep(_NO_REGION_DIALOG_SETTLE)
+            return None
+    # No `refused.is_set()` check here on purpose: a refusal means Nyquist never
+    # ran, so nothing was written and the read raises rather than returning. A
+    # read that *did* come back with parsed bounds is authoritative.
     if selection[1] - selection[0] <= _NO_REGION_EPSILON:
         return None  # bare cursor / no region -> whole track
     return selection

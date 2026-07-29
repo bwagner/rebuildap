@@ -59,6 +59,13 @@ SCRIPT_PIPE_GRACE = 8.0  # allow this long for the FIFOs to be created at startu
 UPGRADE_DIALOG_TEXT = "Project update required"
 UPGRADE_DIALOG_POLL = 0.15  # dialog observed at ~0.18s; poll ahead of that
 
+# NyquistPrompt's refusal when there is no time region. Also untitled, so it is
+# matched on static text like the upgrade dialog. The quotes Audacity puts around
+# "Nyquist Prompt" are deliberately left out of the marker: the tail is unique on
+# its own and needs no escaping inside the AppleScript string literal.
+NO_REGION_DIALOG_TEXT = "requires one or more tracks to be selected"
+NO_REGION_DIALOG_POLL = 0.15  # same cadence as the upgrade-dialog watcher
+
 MOD_SCRIPT_PIPE_HINT = (
     "Audacity's scripting FIFOs were never created, which means the "
     "mod-script-pipe module is not active. Enable it under "
@@ -179,6 +186,85 @@ def dismiss_upgrade_dialog() -> bool:
     )
     out = _query_osascript_quiet(script)
     return out == "dismissed"
+
+
+def no_region_dialog_present() -> bool:
+    """True if Audacity is showing NyquistPrompt's "no time region" refusal.
+
+    Its wording blames track selection, but the missing thing is the *region*:
+    measured 2026-07-29 on 3.7.8, a run with only label tracks selected read the
+    selection fine with a region and raised this dialog without one.
+    """
+    out = _query_osascript_quiet(
+        'tell application "System Events" to tell process "Audacity" to '
+        "return value of every static text of "
+        '(every window whose subrole is "AXDialog")'
+    )
+    return out is not None and NO_REGION_DIALOG_TEXT in out
+
+
+def dismiss_no_region_dialog() -> bool:
+    """Clear NyquistPrompt's refusal. Returns True if one was dismissed.
+
+    **This is the one modal rebuildap clicks**, and only because it was measured
+    safe: with the client still attached, both a hand click and this programmatic
+    one leave Audacity running and the pipe fully usable (2026-07-29, 3.7.8). The
+    five deaths on record all had the client process *already gone* -- closing the
+    FIFO with a modal open is the hazard, not the click. See
+    ``~/.claude/audacity.md``.
+
+    Like :func:`dismiss_upgrade_dialog` it targets the dialog by static text, never
+    "whatever is frontmost": the ``<name> is already open in another window.`` alert
+    remains on the never-click list, its client state having never been measured.
+    """
+    script = (
+        'tell application "System Events" to tell process "Audacity"\n'
+        '  repeat with w in (every window whose subrole is "AXDialog")\n'
+        "    if ((value of static texts of w) as string) contains "
+        f'"{NO_REGION_DIALOG_TEXT}" then\n'
+        '      click button "OK" of w\n'
+        '      return "dismissed"\n'
+        "    end if\n"
+        "  end repeat\n"
+        "end tell\n"
+        'return "none"'
+    )
+    out = _query_osascript_quiet(script)
+    return out == "dismissed"
+
+
+@contextmanager
+def dismissing_no_region_dialog():
+    """Watch for NyquistPrompt's refusal and clear it while inside.
+
+    Sibling of :func:`dismissing_upgrade_dialog`, and for the same two reasons:
+    the dialog can only appear once the command is already in flight, and waiting
+    for the read to time out first would both leave it on screen for the whole
+    15s budget and recover through ``_pa_do_timed``'s abandoned-thread path.
+
+    The yielded event being set is the *signal* callers act on: it means Audacity
+    refused the read, which means there is no time region. The watcher only ever
+    touches this one dialog, matched on its static text, and only via osascript -
+    it never goes near the scripting pipe, so it cannot disturb the in-flight
+    command.
+    """
+    done = threading.Event()
+    dismissed = threading.Event()
+
+    def watch():
+        while not done.is_set():
+            if no_region_dialog_present() and dismiss_no_region_dialog():
+                dismissed.set()
+                return
+            done.wait(NO_REGION_DIALOG_POLL)
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        yield dismissed
+    finally:
+        done.set()
+        watcher.join(timeout=NO_REGION_DIALOG_POLL * 2)
 
 
 @contextmanager

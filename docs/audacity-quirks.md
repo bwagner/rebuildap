@@ -306,6 +306,48 @@ Tests pin both directions: the boundary cases must be included, and a label
 genuinely outside the region must stay outside — a tolerance wide enough to
 swallow that would silently turn a scoped run into a whole-track one.
 
+## No time region: the refusal is the answer
+
+`quantize` and `transpose` scope themselves to the time selection, so they have to
+know whether one exists. **Audacity cannot be asked.** Every channel was measured on
+2026-07-29 (3.7.8) and every one is closed:
+
+| channel | result |
+|---|---|
+| `GetInfo` selection type | does not exist; unknown `Type=` values raise a modal of their own |
+| `GetInfo: Type=Menus` | a **static** table - four captures across a region change *and* a full track-selection change were byte-identical |
+| Selection Toolbar Start/End | custom-drawn: `AXUnknown`, no Accessibility value |
+| button / menu `AXEnabled` | identical with and without a region (with `Stop` reading `false` alongside, proving the field is live) |
+
+### How you end up with no region
+
+Not by clicking a label track's header - that *always* selects
+`first-label-start .. last-label-end` (the span the edge-tolerance fix exists for). The
+state is reached by clicking **inside the track but outside any region**, e.g. past the
+last label: the track stays selected and the region collapses. That is an ordinary
+gesture, not an unusual one, which is why this path was hit in normal use.
+
+What Audacity *does* do is refuse: `NyquistPrompt` with no region raises the modal
+`"Nyquist Prompt" requires one or more tracks to be selected.` The wording blames track
+selection, but the region is the missing thing - the same run reads the selection fine
+with only label tracks selected as long as a region exists. So `resolve_selection_scope`
+sends the read and treats the refusal as its answer: no region means the whole track.
+
+### The dangerous part was never the dialog
+
+Audacity died five times on this path in one session. The cause was the **client
+process exiting while the modal was still open** - closing the FIFO reads to Audacity as
+a hangup, and doing that under a modal is fatal. The dismissal itself is harmless:
+measured with the process kept alive, both a hand click and a programmatic one leave
+Audacity running, and the pipe then answers normally *in the same process*, with no
+drain required.
+
+That is why the recovery lives inside `resolve_selection_scope` rather than in a caller:
+letting `TimeoutError` propagate would unwind the process, which is the actual bug.
+Anything other than our own dialog is refused rather than clicked, and a dialog that
+will not clear raises rather than quietly becoming a whole-track run - the pipe is still
+wedged, so proceeding would act on a project we can no longer talk to.
+
 ## When an .aup3 changes on disk
 
 An `.aup3` is a SQLite database — hence the `.aup3-shm` / `.aup3-wal` companions

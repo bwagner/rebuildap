@@ -35,8 +35,22 @@ These shape most decisions here and are not obvious from the code.
   an osascript click, no crash report, cause unknown. Unlike the format-upgrade
   dialog this one is preventable - `project_window_open` sees the condition
   before the command is sent - so `open_project` refuses with
-  `ProjectAlreadyOpenError` instead. Do not "unify" the two dialogs behind one
-  watcher; only the upgrade dialog is safe to click.
+  `ProjectAlreadyOpenError` instead. Do not "unify" the dialogs behind one
+  watcher; each is matched by its own static text.
+- **Never exit the process while a modal is open.** This is the rule the others
+  were approximating. Audacity died five times on 2026-07-29 and the cause was
+  *not* the dismissal: every death had the client already gone, closing the FIFO
+  with the dialog still up. Measured the same day, with the process kept alive,
+  both a hand click and a programmatic one leave Audacity running and the pipe
+  fully usable. So a bare `except TimeoutError: raise` on a pipe call is itself
+  the hazard - clear the dialog first, then return.
+- **Exactly one modal is clicked deliberately**: NyquistPrompt's
+  `requires one or more tracks to be selected` refusal, via
+  `audacity_present.dismiss_no_region_dialog`, because that refusal is the only
+  way to learn there is no time region (every read channel was measured and is
+  closed - see `docs/audacity-quirks.md`). It is matched on its own static text,
+  never "whatever is frontmost". The `already open in another window` alert stays
+  on the never-click list: its client state was never measured.
 - **No liveness pre-check on the scripting pipe.** Opening the write end and
   closing it reads to Audacity as a client hanging up: it tears down the session
   and reopens the FIFOs, breaking the very round-trip it was meant to protect.
