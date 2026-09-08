@@ -254,7 +254,13 @@ options:
 
 - **macOS.** Windows and Linux are not supported yet. `rebuildap` drives Audacity
   partly through GUI keystrokes, so it needs a real, unlocked login session.
-- [Audacity](https://www.audacityteam.org/)
+- **[Audacity](https://www.audacityteam.org/) 3.x.** Audacity 4 will not work:
+  it ships no `mod-script-pipe`, so there is nothing to drive it with, and it
+  cannot save `.aup3` at all. The two install alongside each other; 3.x releases
+  are at [github.com/audacity/audacity/releases](https://github.com/audacity/audacity/releases).
+  With only Audacity 4 present, `rebuildap` says so and exits rather than
+  waiting on an app that will never answer. See
+  [docs/audacity-quirks.md](docs/audacity-quirks.md) > Audacity 4 is not a target.
 - Enable [mod-script-pipe](https://manual.audacityteam.org/man/scripting.html)
   under Preferences > Modules > mod-script-pipe
 - The [Nyquist](https://manual.audacityteam.org/man/nyquist.html) plug-in

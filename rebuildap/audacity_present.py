@@ -2,6 +2,7 @@
 
 import errno
 import os
+import plistlib
 import select
 import subprocess
 import sys
@@ -9,6 +10,8 @@ import threading
 import time
 from collections.abc import Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 
 import psutil
 
@@ -83,12 +86,125 @@ ACCESSIBILITY_HINT = (
 # osascript error fragments that mean "no accessibility permission", not "no window".
 _ACCESSIBILITY_ERROR_MARKERS = ("assistive access", "-1719", "-1743", "not authorized")
 
+# Which Audacity we can drive, and how to find the ones we cannot. Audacity 4
+# dropped mod-script-pipe entirely, so it is not a version to support later --
+# there is no transport, and it cannot write .aup3 at all (it converts one-way
+# to .aup4). See docs/audacity-quirks.md > Audacity 4 is not a target.
+AUDACITY_APP_NAME = "Audacity"  # what `open -a` and AppleScript are given
+AUDACITY_BUNDLE_ID_PREFIX = "org.audacityteam.audacity"
+SUPPORTED_AUDACITY_MAJOR = 3
+AUDACITY_DOWNLOADS_URL = "https://github.com/audacity/audacity/releases"
+# Where a diagnostic scan looks. Only ever used to explain a failure that has
+# already happened, so an Audacity installed somewhere else costs nothing but a
+# vaguer message -- never a refusal to run.
+APPLICATION_DIRS = ("/Applications", os.path.expanduser("~/Applications"))
+
+
+@dataclass(frozen=True)
+class AudacityInstall:
+    """An Audacity application bundle on disk."""
+
+    path: Path
+    bundle_id: str
+    version: str
+
+    @property
+    def major(self) -> int | None:
+        """Leading component of the version, or None if it is unparseable."""
+        head = self.version.split(".", 1)[0]
+        return int(head) if head.isdigit() else None
+
+
+def _read_bundle_identity(app: Path) -> AudacityInstall | None:
+    """Read an .app bundle's Info.plist, keeping it only if it is an Audacity.
+
+    Reads the plist rather than trusting the bundle's filename: Audacity 4
+    installs as ``Audacity 4.app`` but calls itself ``Audacity`` in
+    CFBundleName, and the user is free to rename either bundle. The identifier
+    is the only stable answer.
+    """
+    try:
+        with open(app / "Contents" / "Info.plist", "rb") as fh:
+            info = plistlib.load(fh)
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        return None
+    bundle_id = info.get("CFBundleIdentifier", "")
+    if not bundle_id.startswith(AUDACITY_BUNDLE_ID_PREFIX):
+        return None
+    return AudacityInstall(
+        path=app,
+        bundle_id=bundle_id,
+        version=info.get("CFBundleShortVersionString", "unknown"),
+    )
+
+
+def find_audacity_installs() -> list[AudacityInstall]:
+    """Every Audacity bundle in the usual install locations, newest name first.
+
+    Purely diagnostic: nothing decides whether to *run* on this, only what to
+    say when running has already failed. That is deliberate -- a scan that
+    misses an Audacity in an unusual location must never turn a working setup
+    into a refusal.
+    """
+    installs = []
+    for directory in APPLICATION_DIRS:
+        try:
+            entries = sorted(Path(directory).glob("*.app"))
+        except OSError:  # unreadable or missing directory
+            continue
+        for app in entries:
+            install = _read_bundle_identity(app)
+            if install is not None:
+                installs.append(install)
+    return installs
+
+
+def unsupported_audacity_hint() -> str | None:
+    """Explain an Audacity that cannot be driven, or None if one that can exists.
+
+    Returns None both when a supported Audacity is installed and when the scan
+    finds nothing at all -- "I could not see it" is not evidence of the wrong
+    version, and saying so would be worse than saying nothing.
+    """
+    installs = find_audacity_installs()
+    if not installs:
+        return None
+    if any(i.major == SUPPORTED_AUDACITY_MAJOR for i in installs):
+        return None
+    found = ", ".join(f"{i.version} ({i.path})" for i in installs)
+    return (
+        f"Found Audacity {found}, but rebuildap needs Audacity "
+        f"{SUPPORTED_AUDACITY_MAJOR}.x: Audacity 4 ships no mod-script-pipe, so "
+        "there is no way to drive it, and it cannot save .aup3 either. "
+        f"Audacity {SUPPORTED_AUDACITY_MAJOR}.x installs alongside it - see "
+        f"{AUDACITY_DOWNLOADS_URL}"
+    )
+
+
+def _no_install_found_hint() -> str:
+    return (
+        "No Audacity application was found in "
+        f"{' or '.join(APPLICATION_DIRS)}. Install Audacity "
+        f"{SUPPORTED_AUDACITY_MAJOR}.x - see {AUDACITY_DOWNLOADS_URL}"
+    )
+
 
 class ScriptPipeUnavailableError(RuntimeError):
     """mod-script-pipe is not active, so scripting can never work.
 
     Distinct from a timeout: waiting longer cannot help — the user has to
     enable the module and restart Audacity.
+    """
+
+
+class AudacityUnavailableError(RuntimeError):
+    """Audacity could not be launched, so there is nothing to drive.
+
+    Distinct from every timeout in this module: those mean "Audacity is there
+    but not answering yet", where waiting is the right response. Here the app
+    was never started, so waiting is only a slower way to fail - which is
+    exactly what used to happen, ~53s of window polling and pipe probing
+    before surfacing as an unrelated TimeoutError.
     """
 
 
@@ -411,11 +527,22 @@ def is_audacity_running():
     return False
 
 
-def start_audacity():
+def start_audacity() -> tuple[bool, str]:
+    """Launch Audacity. Returns ``(ok, stderr)``.
+
+    The status matters and used to be discarded: this was ``os.system``, which
+    let ``Unable to find application named 'Audacity'`` go by unnoticed and the
+    run continue into a state that could never succeed.
+
+    ``open -a`` matches the bundle *filename*, not CFBundleName, so it misses
+    ``Audacity 4.app`` - which is right here, since Audacity 4 cannot be driven
+    anyway. :func:`unsupported_audacity_hint` turns that miss into an
+    explanation.
     """
-    Starts Audacity.
-    """
-    os.system('open -a "Audacity"')
+    result = subprocess.run(
+        ["open", "-a", AUDACITY_APP_NAME], capture_output=True, text=True
+    )
+    return result.returncode == 0, result.stderr.strip()
 
 
 def bring_audacity_window_to_front_as() -> bool:
@@ -658,8 +785,13 @@ def wait_for_audacity_ready(
         # but don't burn the whole budget on something waiting can't fix.
         if not script_pipe_exists():
             if time.monotonic() - start >= SCRIPT_PIPE_GRACE:
+                # "Enable it in Preferences > Modules" is impossible advice on
+                # an Audacity 4, which has no such module to enable, so say
+                # which situation this is when we can tell.
+                version_hint = unsupported_audacity_hint()
+                hint = version_hint if version_hint else MOD_SCRIPT_PIPE_HINT
                 raise ScriptPipeUnavailableError(
-                    f"{_SCRIPT_PIPE_TO} does not exist. {MOD_SCRIPT_PIPE_HINT}"
+                    f"{_SCRIPT_PIPE_TO} does not exist. {hint}"
                 )
             time.sleep(delay)
             delay = min(delay * POLL_DELAY_FACTOR, POLL_DELAY_MAX)
@@ -691,6 +823,11 @@ def wait_for_audacity_ready(
             if windows
             else "Audacity has no open window at all."
         )
+        # Stale FIFOs outlive the Audacity that made them, so an uninstalled
+        # or replaced Audacity lands here rather than in the branch above.
+        version_hint = unsupported_audacity_hint()
+        if version_hint:
+            detail = f"{detail} {version_hint}"
         raise TimeoutError(
             f"Audacity scripting pipe did not respond within {timeout}s. {detail}"
         )
@@ -711,6 +848,9 @@ def assert_audacity_running(verbose: bool = True):
     until a project window exists, and ensuring that is
     :func:`assert_audacity_window`'s job. Waiting on the pipe here deadlocked
     whenever Audacity was running window-less or showing only a dialog.
+
+    Raises :class:`AudacityUnavailableError` if the launch itself fails -
+    there is no window coming, so waiting for one is pure delay.
     """
     if is_audacity_running():
         if verbose:
@@ -718,7 +858,15 @@ def assert_audacity_running(verbose: bool = True):
         return
     if verbose:
         print("Audacity is not running. Starting it.")
-    start_audacity()
+    ok, err = start_audacity()
+    if not ok:
+        # Nothing was launched, so every wait below would time out for a reason
+        # that has nothing to do with the reason it failed. Say why now.
+        detail = err or "`open` gave no reason."
+        hint = unsupported_audacity_hint() or _no_install_found_hint()
+        # Newline rather than a space: both halves are full sentences and the
+        # combined line is too long to scan in a terminal otherwise.
+        raise AudacityUnavailableError(f"Could not start Audacity: {detail}\n{hint}")
     # Only worth waiting after a launch. An already-running Audacity that has
     # no window will never grow one on its own — assert_audacity_window opens
     # one via Cmd-N — so waiting there just burns the timeout.

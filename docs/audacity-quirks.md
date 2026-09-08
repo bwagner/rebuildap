@@ -125,8 +125,17 @@ Each now reports what is actually wrong:
 - **Ambiguous window titles.** An empty project window is titled `Audacity`,
   so opening a second one adds no new *title*. New-window detection compares
   window counts as well as titles.
+- **Audacity not installed, or only Audacity 4 installed.** `start_audacity`
+  was `os.system('open -a "Audacity"')`, which discards the exit status - so
+  `Unable to find application named 'Audacity'` was printed to the terminal by
+  `open` and then ignored. The run continued into a state that could never
+  succeed: 20 s waiting for a window, a Cmd-N that could not land, and 20 s
+  probing a scripting pipe, ending in a `TimeoutError` traceback 52.8 s in.
+  `start_audacity` now returns `(ok, stderr)` and `assert_audacity_running`
+  raises `AudacityUnavailableError` immediately, naming the Audacity versions
+  it can actually find. See *Audacity 4 is not a target* below.
 
-`tests/test_audacity_present.py` covers all three by faking the environment, so no
+`tests/test_audacity_present.py` covers all four by faking the environment, so no
 running Audacity is required.
 
 ## Projects saved by an older Audacity
@@ -406,3 +415,63 @@ production-ready). So treat this as permanent behaviour to design around.
 One trap for tooling: opening an `.aup3` with SQLite **read-only still creates
 `-shm` and `-wal` sidecars** next to it (the main file's bytes are untouched).
 A read-only inspection is therefore not a no-op on the directory.
+
+
+## Audacity 4 is not a target
+
+Audacity 4.0.0 (the Qt rewrite) **ships no `mod-script-pipe`**, so there is no
+transport to drive it with. Verified three ways on a local 4.0.0 bundle:
+
+- `find "/Applications/Audacity 4.app" -iname "mod-*"` returns nothing - there
+  is no modules directory at all, only `nyquist-plug-ins/` and `PlugIns/`;
+- `strings -a Contents/MacOS/audacity | grep audacity_script_pipe` returns
+  nothing (the only `*script*` hits anywhere in the bundle are Qt's
+  `QtQmlWorkerScript`, unrelated);
+- the official 4.0.0 release notes list Macro Manager and the scripting pipe
+  among the Audacity 3 features not reproduced in 4.0, alongside Time Tracks,
+  Note/MIDI tracks, Mixer, VAMP and LADSPA hosting, and Play-at-speed.
+
+This is not a "port it later" gap. Audacity 4 uses `.aup4`, converts `.aup3`
+one-way and **cannot save back to `.aup3`** - so even a hypothetical scripting
+interface would not let it produce the format rebuildap exists to write.
+rebuildap requires Audacity 3.x, and the two install alongside each other.
+
+Three bundle-metadata details matter, because each breaks a plausible
+Audacity-3-era detection:
+
+| | Audacity 3 | Audacity 4.0.0 |
+| --- | --- | --- |
+| bundle on disk | `Audacity.app` | `Audacity 4.app` |
+| `CFBundleName` | `Audacity` | `Audacity` |
+| `CFBundleIdentifier` | `org.audacityteam.audacity` | `org.audacityteam.audacity4` |
+| `CFBundleExecutable` | `Audacity` | `audacity` (lowercase) |
+
+- `open -a "Audacity"` matches the bundle *filename*, so it misses
+  `Audacity 4.app` and exits 1. Which is the behaviour we want - but it has to
+  be *noticed*.
+- `osascript -e 'tell application "Audacity" to activate'` fails fast with
+  `Can't get application "Audacity". (-1728)`. Measured at 0.1 s: it does
+  **not** hang, and does not raise a "Where is Audacity?" chooser, so it was
+  never the cause of the long run above.
+- A running Audacity 4's process name is lowercase `audacity`, so
+  `is_audacity_running`'s case-sensitive `"Audacity" in name` test reports it
+  as not running. Left as is deliberately: it means an Audacity 4 in front of
+  you is correctly treated as "no usable Audacity", and if a 3.x is installed
+  it is launched alongside.
+
+`find_audacity_installs` reads `Info.plist` from every `.app` in `/Applications`
+and `~/Applications` and keeps the ones whose bundle id starts with
+`org.audacityteam.audacity`. It identifies by bundle id, never by name, because
+Audacity 4 also calls itself `Audacity` in `CFBundleName`.
+
+The scan is **diagnostic only**. Nothing decides whether to run on its result,
+and `unsupported_audacity_hint` returns `None` when the scan finds nothing -
+"I could not see it" is not evidence of the wrong version. An Audacity 3
+installed somewhere unusual therefore costs a vaguer error message, never a
+refusal to run.
+
+One consequence worth knowing when reproducing this: the FIFOs in `/tmp`
+outlive the Audacity that created them. With Audacity 3 uninstalled, its stale
+`audacity_script_pipe.*` files make `script_pipe_exists()` true, so the failure
+lands in the *timeout* branch rather than the "module disabled" branch. Both
+branches now append the version hint when there is one.

@@ -16,11 +16,17 @@ body runs after this fixture, so its own patches win.
 The blocked names are the places where this package actually reaches out:
 
 - ``pa.do``                  — every scripting-pipe command
-- ``start_audacity``         — ``os.system('open -a "Audacity"')``
+- ``start_audacity``         - ``subprocess.run(["open", "-a", "Audacity"])``
 - ``_probe_tracks_with_timeout`` — talks to the FIFOs directly, bypassing pa.do
 - ``subprocess.run``         — every AppleScript / GUI keystroke goes through
                                ``run_osascript`` -> here, as does the
                                quantize_labels shell-out
+- ``APPLICATION_DIRS``       - the /Applications scan behind the "wrong Audacity
+                               version" diagnostic. Emptied rather than blocked:
+                               it is read on error paths several tests exercise,
+                               and left alone those tests would assert against
+                               whatever Audacity the developer's machine happens
+                               to have installed.
 - ``_dismissing_no_region_dialog`` — replaced by an idle stand-in rather than
                                blocked. It is a *background watcher*: blocking it
                                would raise inside a daemon thread, where pytest can
@@ -86,6 +92,9 @@ def no_live_audacity(request, monkeypatch):
     # Beneath osascript and the quantize_labels shell-out. Tests that legitimately
     # fake a subprocess call patch it again in their own body, which wins.
     monkeypatch.setattr(subprocess, "run", _forbidden("subprocess.run"))
+    # No real /Applications, so the version diagnostic reports "nothing found"
+    # by default. Tests about that diagnostic point it at a tmp_path instead.
+    monkeypatch.setattr(ap, "APPLICATION_DIRS", ())
     # A watcher thread cannot be *blocked* usefully - it would raise where only
     # an unnamed thread warning surfaces - so it is stubbed idle instead.
     monkeypatch.setattr(af, "_dismissing_no_region_dialog", _idle_watcher)

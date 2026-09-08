@@ -10,7 +10,14 @@ import time
 
 import pytest
 
+from rebuildap import audacity_funcs as af
 from rebuildap import audacity_present as ap
+
+# Captured at import time, before conftest's autouse fixture replaces the module
+# attribute with a stand-in that fails the test. The two tests below are *about*
+# start_audacity itself, so they need the real one; they stay offline because
+# they fake the subprocess.run underneath it.
+_REAL_START_AUDACITY = ap.start_audacity
 
 
 def _fake_window_names(monkeypatch, sequence):
@@ -499,3 +506,219 @@ def test_no_region_watcher_clicks_nothing_when_no_dialog_appears(monkeypatch):
 
     assert clicks == []
     assert not dismissed.is_set()
+
+
+# --- a missing or wrong-version Audacity ----------------------------------
+#
+# Reported 2026-09-08: with only Audacity 4 installed, `rebuildap check` printed
+# `Unable to find application named 'Audacity'` and then kept going for 52.8s --
+# 20s waiting for a window, 20s probing a scripting pipe whose FIFOs were stale
+# leftovers, and a Cmd-N in between -- before dying with a TimeoutError
+# traceback. From the outside that is indistinguishable from a hang, and the one
+# fact that mattered was printed first and then contradicted by everything after
+# it. These tests pin the two halves of the fix: fail immediately, and say which
+# situation this is.
+
+
+def _fake_command(monkeypatch, returncode=0, stderr=""):
+    """Fake subprocess.run for a plain command - here `open -a Audacity`."""
+
+    def fake_run(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=[], returncode=returncode, stdout="", stderr=stderr
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
+def _fake_app_bundle(directory, name, bundle_id, version):
+    """Write a minimal .app whose Info.plist carries the identity we read."""
+    import plistlib
+
+    contents = directory / f"{name}.app" / "Contents"
+    contents.mkdir(parents=True)
+    with open(contents / "Info.plist", "wb") as fh:
+        plistlib.dump(
+            {
+                "CFBundleIdentifier": bundle_id,
+                "CFBundleShortVersionString": version,
+                "CFBundleName": "Audacity",
+            },
+            fh,
+        )
+    return directory / f"{name}.app"
+
+
+def _installs(monkeypatch, tmp_path, *bundles):
+    for name, bundle_id, version in bundles:
+        _fake_app_bundle(tmp_path, name, bundle_id, version)
+    monkeypatch.setattr(ap, "APPLICATION_DIRS", (str(tmp_path),))
+
+
+def test_failed_launch_raises_instead_of_waiting_for_a_window(monkeypatch, tmp_path):
+    """Nothing was launched, so every subsequent wait is pure delay."""
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: False)
+    monkeypatch.setattr(ap, "start_audacity", lambda: (False, "no such application"))
+    monkeypatch.setattr(
+        ap,
+        "wait_for_audacity_window",
+        lambda *a, **k: pytest.fail("waited for a window that can never appear"),
+    )
+
+    with pytest.raises(ap.AudacityUnavailableError, match="no such application"):
+        ap.assert_audacity_running(verbose=False)
+
+
+def test_a_successful_launch_still_waits_for_its_window(monkeypatch):
+    """The happy path is unchanged: a launch that worked is worth waiting on."""
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: False)
+    monkeypatch.setattr(ap, "start_audacity", lambda: (True, ""))
+    waited = []
+    monkeypatch.setattr(
+        ap, "wait_for_audacity_window", lambda *a, **k: waited.append(True) or True
+    )
+
+    ap.assert_audacity_running(verbose=False)
+    assert waited == [True]
+
+
+def test_an_already_running_audacity_is_never_launched(monkeypatch):
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: True)
+    monkeypatch.setattr(
+        ap, "start_audacity", lambda: pytest.fail("launched an already-running app")
+    )
+    ap.assert_audacity_running(verbose=False)
+
+
+def test_start_audacity_reports_the_failure_open_printed(monkeypatch):
+    """os.system discarded this status, which is how the 53s walk began."""
+    _fake_command(
+        monkeypatch, returncode=1, stderr="Unable to find application named 'Audacity'"
+    )
+    ok, err = _REAL_START_AUDACITY()
+    assert ok is False
+    assert "Unable to find application named" in err
+
+
+def test_start_audacity_reports_success(monkeypatch):
+    _fake_command(monkeypatch, returncode=0)
+    assert _REAL_START_AUDACITY() == (True, "")
+
+
+def test_only_audacity_4_installed_is_named_in_the_error(monkeypatch, tmp_path):
+    _installs(
+        monkeypatch, tmp_path, ("Audacity 4", "org.audacityteam.audacity4", "4.0.0")
+    )
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: False)
+    monkeypatch.setattr(ap, "start_audacity", lambda: (False, "not found"))
+
+    with pytest.raises(ap.AudacityUnavailableError) as excinfo:
+        ap.assert_audacity_running(verbose=False)
+    message = str(excinfo.value)
+    assert "4.0.0" in message
+    assert "3.x" in message
+
+
+def test_no_audacity_at_all_says_so_rather_than_blaming_a_version(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(ap, "APPLICATION_DIRS", (str(tmp_path),))
+    monkeypatch.setattr(ap, "is_audacity_running", lambda: False)
+    monkeypatch.setattr(ap, "start_audacity", lambda: (False, "not found"))
+
+    with pytest.raises(ap.AudacityUnavailableError, match="No Audacity application"):
+        ap.assert_audacity_running(verbose=False)
+
+
+def test_a_supported_audacity_produces_no_version_hint(monkeypatch, tmp_path):
+    """Absence of a hint is what lets the normal error messages stand."""
+    _installs(monkeypatch, tmp_path, ("Audacity", "org.audacityteam.audacity", "3.7.8"))
+    assert ap.unsupported_audacity_hint() is None
+
+
+def test_audacity_3_alongside_4_is_not_a_version_problem(monkeypatch, tmp_path):
+    _installs(
+        monkeypatch,
+        tmp_path,
+        ("Audacity", "org.audacityteam.audacity", "3.7.8"),
+        ("Audacity 4", "org.audacityteam.audacity4", "4.0.0"),
+    )
+    assert ap.unsupported_audacity_hint() is None
+
+
+def test_an_unfindable_audacity_is_never_reported_as_the_wrong_version(
+    monkeypatch, tmp_path
+):
+    """Absence of evidence is not evidence: an Audacity installed somewhere
+    unusual must not be reported as an Audacity 4."""
+    monkeypatch.setattr(ap, "APPLICATION_DIRS", (str(tmp_path),))
+    assert ap.unsupported_audacity_hint() is None
+
+
+def test_installs_are_identified_by_bundle_id_not_by_name(monkeypatch, tmp_path):
+    """Audacity 4 calls itself 'Audacity' in CFBundleName, so names decide nothing."""
+    _installs(
+        monkeypatch,
+        tmp_path,
+        ("Audacity 4", "org.audacityteam.audacity4", "4.0.0"),
+        ("Audacity Recorder", "com.example.notaudacity", "1.0"),
+    )
+    found = ap.find_audacity_installs()
+    assert [i.bundle_id for i in found] == ["org.audacityteam.audacity4"]
+    assert found[0].major == 4
+
+
+def test_a_bundle_without_a_readable_plist_is_skipped(monkeypatch, tmp_path):
+    (tmp_path / "Broken.app" / "Contents").mkdir(parents=True)
+    (tmp_path / "Broken.app" / "Contents" / "Info.plist").write_text("not a plist")
+    monkeypatch.setattr(ap, "APPLICATION_DIRS", (str(tmp_path),))
+    assert ap.find_audacity_installs() == []
+
+
+def test_an_unparseable_version_is_not_mistaken_for_a_supported_one(
+    monkeypatch, tmp_path
+):
+    _installs(
+        monkeypatch, tmp_path, ("Audacity", "org.audacityteam.audacity", "unknown")
+    )
+    assert ap.find_audacity_installs()[0].major is None
+    assert ap.unsupported_audacity_hint() is not None
+
+
+def test_a_missing_applications_directory_is_not_an_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(ap, "APPLICATION_DIRS", (str(tmp_path / "nope"),))
+    assert ap.find_audacity_installs() == []
+
+
+def test_audacity_4_explains_the_absent_fifos_it_causes(monkeypatch, tmp_path):
+    """'Enable mod-script-pipe in Preferences' is impossible advice on an
+    Audacity 4 - it has no such module to enable."""
+    _installs(
+        monkeypatch, tmp_path, ("Audacity 4", "org.audacityteam.audacity4", "4.0.0")
+    )
+    monkeypatch.setattr(ap, "_SCRIPT_PIPE_TO", str(tmp_path / "to"))
+    monkeypatch.setattr(ap, "_SCRIPT_PIPE_FROM", str(tmp_path / "from"))
+    monkeypatch.setattr(ap, "SCRIPT_PIPE_GRACE", 0.2)
+
+    with pytest.raises(ap.ScriptPipeUnavailableError, match="4.0.0"):
+        ap.wait_for_audacity_ready(timeout=10.0)
+
+
+def test_stale_fifos_from_a_replaced_audacity_still_name_the_version(
+    monkeypatch, tmp_path
+):
+    """The reported run's actual shape: FIFOs left behind by an Audacity 3 that
+    is no longer installed, so the pipe *looks* present and the run times out."""
+    _installs(
+        monkeypatch, tmp_path, ("Audacity 4", "org.audacityteam.audacity4", "4.0.0")
+    )
+    (tmp_path / "to").touch()
+    (tmp_path / "from").touch()
+    monkeypatch.setattr(ap, "_SCRIPT_PIPE_TO", str(tmp_path / "to"))
+    monkeypatch.setattr(ap, "_SCRIPT_PIPE_FROM", str(tmp_path / "from"))
+    monkeypatch.setattr(ap, "audacity_window_names", lambda: [])
+    monkeypatch.setattr(af, "_drain_read_pipe", lambda: b"")
+    monkeypatch.setattr(ap, "_probe_tracks_with_timeout", lambda _t: None)
+
+    with pytest.raises(TimeoutError, match="4.0.0"):
+        ap.wait_for_audacity_ready(timeout=0.5)

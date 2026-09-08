@@ -1025,8 +1025,21 @@ def main(argv=None):
             "--force applies to the open-project export; "
             "`export AUP3` writes beside that file."
         )
-    args.func(args)
+    try:
+        args.func(args)
+    except (
+        ap.AudacityUnavailableError,
+        ap.ScriptPipeUnavailableError,
+        TimeoutError,
+    ) as e:
+        # The three ways the Audacity environment can be unusable. Each already
+        # carries a message written for a person, so a traceback adds only
+        # noise -- and a traceback is what the missing-Audacity case used to
+        # end in, 53s after the run started.
+        print(f"{parser.prog}: {e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

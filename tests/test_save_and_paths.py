@@ -1262,3 +1262,63 @@ def test_no_other_projects_means_no_pointless_hint(monkeypatch, capsys):
 
     assert rebuildap.prerequisites_met() is False
     assert "bring the one you mean" not in capsys.readouterr().err.lower()
+
+
+# --- an unusable Audacity exits, it does not traceback --------------------
+#
+# Reported 2026-09-08: with only Audacity 4 installed, `rebuildap check` ended
+# in a raw TimeoutError traceback 52.8s in. The three ways the environment can
+# be unusable all carry a message written for a person, so main prints that and
+# exits non-zero.
+
+
+def _exit_code_when_command_raises(monkeypatch, exc):
+    import sys as _sys
+
+    import rebuildap
+
+    def boom(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr(rebuildap, "check_label_age", boom)
+    monkeypatch.setattr(_sys, "argv", ["rebuildap", "check"])
+    return rebuildap.main()
+
+
+def test_a_missing_audacity_exits_non_zero_without_a_traceback(monkeypatch, capsys):
+    code = _exit_code_when_command_raises(
+        monkeypatch, ap.AudacityUnavailableError("Could not start Audacity: nope")
+    )
+    assert code == 1
+    assert "Could not start Audacity: nope" in capsys.readouterr().err
+
+
+def test_a_disabled_script_pipe_exits_non_zero(monkeypatch, capsys):
+    code = _exit_code_when_command_raises(
+        monkeypatch, ap.ScriptPipeUnavailableError("no FIFOs")
+    )
+    assert code == 1
+    assert "no FIFOs" in capsys.readouterr().err
+
+
+def test_a_wedged_pipe_exits_non_zero(monkeypatch, capsys):
+    code = _exit_code_when_command_raises(monkeypatch, TimeoutError("no answer"))
+    assert code == 1
+    assert "no answer" in capsys.readouterr().err
+
+
+def test_a_successful_run_still_exits_zero(monkeypatch):
+    import sys as _sys
+
+    import rebuildap
+
+    monkeypatch.setattr(rebuildap, "check_label_age", lambda *a, **k: None)
+    monkeypatch.setattr(_sys, "argv", ["rebuildap", "check"])
+    assert rebuildap.main() == 0
+
+
+def test_an_unexpected_error_is_not_swallowed(monkeypatch):
+    """Only the environment errors are turned into a message. A bug in the
+    command itself must still surface as a traceback."""
+    with pytest.raises(ValueError):
+        _exit_code_when_command_raises(monkeypatch, ValueError("a real bug"))
