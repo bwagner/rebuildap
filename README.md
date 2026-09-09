@@ -40,6 +40,24 @@ It also flags any label track that exists only in Audacity, with no `.txt` file
 yet — select those tracks in Audacity and run `rebuildap` with no arguments in
 the project directory to export them.
 
+Each comparison line also carries the file's git state, when it has one worth
+mentioning:
+
+```console
+Label file chords_mysong.txt and exported label track chords are identical.
+Label file bars_mysong.txt and exported label track bars are identical [git: untracked].
+Label file parts_mysong.txt differs from exported label track parts [git: uncommitted changes]:
+```
+
+"Matches the project" and "is safe" are different questions. The `.aup3` is
+disposable and the `.txt` files are the source of truth *because they are
+versioned*, so a file that matches its track perfectly but sits in no commit has
+passed the check while failing the point of it. Both states count: `git add`
+alone is not safety either, since the content is still in no commit. A file that
+is committed and unmodified gets no marker, and neither does anything outside a
+git repository - rebuildap does not require the label files to be versioned. A
+gitignored `.aup3` is never flagged.
+
 ## How it works
 
 Label files are matched by name: for input `mysong.mp3`, every `*_mysong.txt`
@@ -59,7 +77,7 @@ There are six commands:
 |---|---|
 | `build AUDIO` | the audio (`.mp3`, `.wav`, anything Audacity imports) is imported, and the matching `*_stem.txt` files become label tracks |
 | `export [AUP3]` | the project's label tracks are exported to individual `.txt` files; with no argument, the running Audacity project's are |
-| `check [AUP3]` | the project's label tracks are compared against the versioned `.txt` files |
+| `check [AUP3]` | the project's label tracks are compared against the versioned `.txt` files, and any label file not committed to git is named |
 | `import LABELFILE` | one label file is added to the open project as a label track |
 | `quantize [BEATS_TRACK]` | the open project's selected label track is snapped to a beats track, in place |
 | `transpose SEMITONES` | the open project's selected label track has its chords transposed, in place |

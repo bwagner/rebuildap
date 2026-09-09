@@ -210,3 +210,68 @@ line) is rejected **before Audacity is started**, with a `LabelFormatError`
 naming the file and line number — the same fail-before-launch stance as the
 already-open and aup3-exists guards, so a bad file costs ~0.07 s and leaks no
 window.
+
+## Matching the project is not the same as being safe
+
+`check` compares each label file against its label track and reports a diff. That
+answers one question. The other one it used to leave unasked is whether the file
+it just validated is actually in git.
+
+Observed 2026-09-08 on a real project: `check` reported four label files
+identical to their tracks - a clean bill of health - while three of the four were
+untracked. Nothing in the output hinted at it. Given this project's premise (the
+`.aup3` is disposable, the `.txt` files are the source of truth *because they are
+versioned*) that is the more consequential of the two answers, and it was the
+missing one.
+
+So the git state now rides on the comparison line itself:
+
+```
+Label file chords_mysong.txt and exported label track chords are identical.
+Label file bars_mysong.txt and exported label track bars are identical [git: untracked].
+Label file parts_mysong.txt differs from exported label track parts [git: uncommitted changes]:
+```
+
+One line per label file, carrying both facts about it. The marker sits *before*
+the punctuation in both forms, because the diff follows the `:` and has to start
+on its own line.
+
+Both categories count. `git add` without a commit leaves the content in no
+commit, so staged files are marked `uncommitted changes` rather than treated as
+safe. A committed, unmodified file gets no marker at all, and neither does
+anything outside a repository.
+
+One consequence of hanging this off the comparison line: the mtime gate's early
+return ("All label files are newer... Nothing to do.") prints no comparison
+lines, so it reports no git state either. A run that does nothing still says
+nothing about whether the files are committed.
+
+### Why it shells out to git
+
+`rebuildap/git_tracking.py` runs `git status --porcelain -z` in a subprocess
+rather than taking a library dependency. `version_info.py` already asks git
+questions exactly this way, and two ways of talking to git in one codebase would
+be one too many. The whole query is a single call.
+
+Details that the format forces:
+
+- **`-z`, not plain `--porcelain`.** The latter quotes and escapes any path
+  containing a space, a quote or a non-ASCII byte, and separates records with a
+  newline, which a filename may itself contain.
+- **Paths are relative to the repository root**, never to the directory git was
+  run in, so each one is joined to `rev-parse --show-toplevel` before matching.
+- **A rename or copy record carries two paths.** Reading such a record as one
+  entry consumes the following entry's status code and desyncs everything after
+  it. `tests/test_git_tracking.py` pins this with a real staged rename.
+- **Ignored files produce no entry at all**, which is why the deliberately
+  unversioned `.aup3` needs no special-casing.
+
+The tests drive a real `git` against a `tmp_path` repo rather than faking
+subprocess output - the module exists to parse another tool's output, and a fake
+would only assert that our idea of the format agrees with itself. `tests/conftest.py`
+lets `git` through its `subprocess.run` block for that reason; everything else
+stays blocked.
+
+**Known gap, deliberate:** a label file that is *gitignored* produces no status
+entry and therefore reads as safe. Catching that needs `--ignored` and a third
+category. The two categories here are the ones the tool reports.

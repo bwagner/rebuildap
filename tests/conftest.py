@@ -18,9 +18,14 @@ The blocked names are the places where this package actually reaches out:
 - ``pa.do``                  — every scripting-pipe command
 - ``start_audacity``         - ``subprocess.run(["open", "-a", "Audacity"])``
 - ``_probe_tracks_with_timeout`` — talks to the FIFOs directly, bypassing pa.do
-- ``subprocess.run``         — every AppleScript / GUI keystroke goes through
+- ``subprocess.run``         - every AppleScript / GUI keystroke goes through
                                ``run_osascript`` -> here, as does the
-                               quantize_labels shell-out
+                               quantize_labels shell-out. ``git`` is the one
+                               exception and is let through: it reaches a
+                               tmp_path repo, never Audacity, and
+                               ``git_tracking`` exists to parse git's own
+                               output, which a fake would only assert against
+                               our idea of it.
 - ``APPLICATION_DIRS``       - the /Applications scan behind the "wrong Audacity
                                version" diagnostic. Emptied rather than blocked:
                                it is read on error paths several tests exercise,
@@ -53,6 +58,7 @@ from rebuildap import audacity_funcs as af
 from rebuildap import audacity_present as ap
 
 AUDACITY_MARKER = "audacity"
+_REAL_SUBPROCESS_RUN = subprocess.run
 
 
 @contextmanager
@@ -78,6 +84,26 @@ def _forbidden(what):
     return blocked
 
 
+def _except_git(what):
+    """Block subprocess.run, but let ``git`` through.
+
+    git cannot reach Audacity, and the tests that use it drive a repo under
+    tmp_path. Blocking it would force ``git_tracking`` to be tested against a
+    fake of ``--porcelain -z``, which is the one thing such a test must not do:
+    the module's whole job is parsing that format, so a fake would happily
+    agree with the code's misreading of it.
+    """
+    blocked = _forbidden(what)
+
+    def run(*args, **kwargs):
+        command = args[0] if args else kwargs.get("args")
+        if isinstance(command, (list, tuple)) and command and str(command[0]) == "git":
+            return _REAL_SUBPROCESS_RUN(*args, **kwargs)
+        return blocked(*args, **kwargs)
+
+    return run
+
+
 @pytest.fixture(autouse=True)
 def no_live_audacity(request, monkeypatch):
     """Block every route to a real Audacity unless the test opts in."""
@@ -91,7 +117,7 @@ def no_live_audacity(request, monkeypatch):
     )
     # Beneath osascript and the quantize_labels shell-out. Tests that legitimately
     # fake a subprocess call patch it again in their own body, which wins.
-    monkeypatch.setattr(subprocess, "run", _forbidden("subprocess.run"))
+    monkeypatch.setattr(subprocess, "run", _except_git("subprocess.run"))
     # No real /Applications, so the version diagnostic reports "nothing found"
     # by default. Tests about that diagnostic point it at a tmp_path instead.
     monkeypatch.setattr(ap, "APPLICATION_DIRS", ())

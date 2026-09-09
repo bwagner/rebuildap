@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import audacity_funcs as af
 from . import audacity_present as ap
+from . import git_tracking
 from .utils import normalize_label_line
 from .version_info import get_version_info
 
@@ -151,6 +152,9 @@ def _check_label_age_via_getinfo(filename, label_files):
     for why there is no per-file gate.
     """
     contents = af.get_label_tracks_content_via_getinfo()
+    # One git call for the whole set, ahead of the loop. `unversioned` answers
+    # None outside a repository, which collapses to "no note on any line".
+    git_reasons = git_tracking.unversioned(label_files) or {}
     # Beside the project being checked, not in the cwd: `rebuildap check
     # /elsewhere/song.aup3` used to scatter export artifacts wherever it
     # happened to be run from.
@@ -166,7 +170,13 @@ def _check_label_age_via_getinfo(filename, label_files):
             label_file.read_text().splitlines(keepends=True)
         )
         labels_from_proj = process_lines(expected.splitlines(keepends=True))
-        _report_diff(label_file, short_name, labels_from_file, labels_from_proj)
+        _report_diff(
+            label_file,
+            short_name,
+            labels_from_file,
+            labels_from_proj,
+            git_reasons.get(label_file),
+        )
         _maybe_write_divergent_export(
             expected_content=expected,
             label_file=label_file,
@@ -221,7 +231,25 @@ def _maybe_write_divergent_export(
     return out_path
 
 
-def _report_diff(label_file, exported_label_name, labels_from_file, labels_from_proj):
+def _git_note(reason):
+    """The suffix naming a label file's git state, or "" when it is safe.
+
+    Carried on the comparison line rather than in a list of its own: the file
+    has one line in this output and both facts about it belong there. "Matches
+    the project" and "is committed" are different questions, and answering only
+    the first is how `check` came to give three untracked files a clean bill of
+    health (2026-09-08).
+    """
+    return f" [git: {reason}]" if reason else ""
+
+
+def _report_diff(
+    label_file,
+    exported_label_name,
+    labels_from_file,
+    labels_from_proj,
+    git_reason=None,
+):
     sm = list(
         difflib.unified_diff(
             labels_from_file,
@@ -230,14 +258,19 @@ def _report_diff(label_file, exported_label_name, labels_from_file, labels_from_
             f"Audacity-label track: {exported_label_name}",
         )
     )
+    note = _git_note(git_reason)
+    # The note goes before the punctuation in both forms, so the diff that
+    # follows the ":" still starts on its own line.
     if sm:
         print(
-            f"Label file {label_file.name} differs from exported label track {exported_label_name}:"
+            f"Label file {label_file.name} differs from exported label track "
+            f"{exported_label_name}{note}:"
         )
         print("".join(sm))
     else:
         print(
-            f"Label file {label_file.name} and exported label track {exported_label_name} are identical."
+            f"Label file {label_file.name} and exported label track "
+            f"{exported_label_name} are identical{note}."
         )
 
 
