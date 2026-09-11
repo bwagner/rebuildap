@@ -82,7 +82,8 @@ These shape most decisions here and are not obvious from the code.
 
 ## Project memory
 
-Backlog, design decisions with rationale, and retrospectives live in
-`~/.claude/projects/-Users-bwagner-projects-rebuildap/memory/`. `decisions.md`
-explains *why* several non-obvious choices were made - read it before reversing
-one.
+Backlog and design decisions with rationale live at the top level of
+`$(~/.claude/bin/claudemeta-dir)`; retrospectives are in its `memory/`
+subdirectory. Resolve that path by running the script - never build it by hand.
+`decisions.md` explains *why* several non-obvious choices were made - read it
+before reversing one.
