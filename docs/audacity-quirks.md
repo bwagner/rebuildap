@@ -235,7 +235,8 @@ saved-as states, since several of the workarounds above rest on it:
   does not expose a document path, so there is **no** route to per-window file
   identity — neither via AX nor via `GetInfo`, whose types are only `Commands`,
   `Menus`, `Preferences`, `Tracks`, `Clips`, `Envelopes`, `Labels`, `Boxes`.
-  Same-stem projects in different directories are permanently indistinguishable.
+  Same-stem projects in different directories are indistinguishable *per window*
+  (but see the open-files bullet below for telling which one is open).
 - **But `GetInfo: Type=Menus` does surface full project *paths*** — the **Open
   Recent** submenu lists recently opened `.aup3` files as absolute-path labels.
   This is not per-window identity (it is a recency list, not "the file this
@@ -249,6 +250,18 @@ saved-as states, since several of the workarounds above rest on it:
   auto-writing to one (which the same-stem ambiguity could get wrong). (Strict
   `json.loads` on the whole menu payload fails — some label carries an invalid
   escape — so the Open Recent section is scraped by a scoped regex.)
+- **The process's open files name the open project exactly** (measured 2026-09-14).
+  Audacity keeps each open project's SQLite database open - the `.aup3` plus its
+  `-wal` and `-shm` sidecars - and drops all three on close, so the process's
+  open-file list (`lsof -p <pid>`, or `psutil`'s `open_files()`, which is what
+  `open_project_paths` uses: ~0.1 ms against ~50 ms for `lsof`) is the set of
+  projects open right now, with full paths. Measured with a copy open from
+  `/Volumes/SSD_4T/...` while the same-stem original sat in Open Recent: only the
+  copy's path appeared. It is still a *set*, not a window-to-path map, so two
+  same-stem copies open at once stay indistinguishable. `quantize` and
+  `transpose` use it only to settle what would otherwise be a refusal: when Open
+  Recent names several directories for the stem, they keep the one whose `.aup3`
+  is open.
 - **Intersected with the window titles, it does yield the open project's file
   name** - which is weaker than per-window identity but enough to *name* things.
   A title says a project is open but carries no path; Open Recent gives a path

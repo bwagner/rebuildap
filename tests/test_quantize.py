@@ -17,6 +17,7 @@ import pytest
 
 import rebuildap
 from rebuildap import audacity_funcs as af
+from rebuildap import audacity_present as ap
 
 
 def _run_result(stderr="", stdout=""):
@@ -694,25 +695,95 @@ def test_resolve_project_dir_uses_the_sole_recent_project_dir(monkeypatch, tmp_p
     assert rb._resolve_project_dir("song", "-q") == proj
 
 
-def test_resolve_project_dir_refuses_when_ambiguous(monkeypatch, tmp_path, capsys):
+def test_resolve_project_dir_refuses_when_ambiguous(monkeypatch, tmp_path):
+    """Refusing is a failure, not a quiet success: the hotkey titles a run by its
+    exit status, and an exit-0 refusal read as "ok" live (2026-09-14)."""
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         af, "find_recent_project_dirs", lambda _s: [Path("/a"), Path("/b")]
     )
-    assert rb._resolve_project_dir("song", "-q") is None
-    err = capsys.readouterr().err
-    assert "/a" in err and "/b" in err
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [])
+    with pytest.raises(SystemExit) as excinfo:
+        rb._resolve_project_dir("song", "-q")
+    message = str(excinfo.value)
+    assert "/a" in message and "/b" in message
 
 
-def test_resolve_project_dir_refuses_when_unknown(monkeypatch, tmp_path, capsys):
+def test_resolve_project_dir_refuses_when_unknown(monkeypatch, tmp_path):
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
-    assert rb._resolve_project_dir("song", "-q") is None
-    assert "not in Audacity's Open Recent" in capsys.readouterr().err
+    with pytest.raises(SystemExit, match="not in Audacity's Open Recent"):
+        rb._resolve_project_dir("song", "-q")
+
+
+def test_resolve_project_dir_narrows_ambiguous_recents_to_the_open_copy(
+    monkeypatch, tmp_path
+):
+    """The live case: a copy on another disk is open, the same-stem original is
+    still in Open Recent. Audacity holds the open project's file open, which names
+    the copy exactly."""
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    original, copy = Path("/batch01/song"), Path("/Volumes/SSD/song")
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [original, copy])
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [copy / "song.aup3"])
+
+    assert rb._resolve_project_dir("song", "-q") == copy
+
+
+def test_resolve_project_dir_still_refuses_when_both_copies_are_open(
+    monkeypatch, tmp_path
+):
+    # A set of open paths, not a window-to-path map: with both open, the frontmost
+    # window's stem cannot say which one it is.
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    a, b = Path("/a/song"), Path("/b/song")
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [a, b])
+    monkeypatch.setattr(
+        ap, "open_project_paths", lambda: [a / "song.aup3", b / "song.aup3"]
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        rb._resolve_project_dir("song", "-q")
+    assert str(a) in str(excinfo.value) and str(b) in str(excinfo.value)
+
+
+def test_resolve_project_dir_ignores_open_projects_with_another_stem(
+    monkeypatch, tmp_path
+):
+    # An open 'other.aup3' that happens to sit in one candidate dir is not this
+    # project and must not break the tie.
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    a, b = Path("/a/song"), Path("/b/song")
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [a, b])
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [a / "other.aup3"])
+    with pytest.raises(SystemExit):
+        rb._resolve_project_dir("song", "-q")
+
+
+def test_resolve_project_dir_does_not_consult_open_files_when_unambiguous(
+    monkeypatch, tmp_path
+):
+    """The open-files route only settles what used to be a refusal; a sole Open
+    Recent candidate resolves exactly as before."""
+    import rebuildap as rb
+
+    def forbidden():
+        raise AssertionError("open_project_paths consulted without ambiguity")
+
+    monkeypatch.chdir(tmp_path)
+    proj = tmp_path / "proj"
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [proj])
+    monkeypatch.setattr(ap, "open_project_paths", forbidden)
+    assert rb._resolve_project_dir("song", "-q") == proj
 
 
 # --- persisting the quantized track to the versioned .txt -------------------
@@ -783,21 +854,22 @@ def test_quantize_writes_to_the_discovered_project_dir_from_any_cwd(
 
 
 def test_quantize_refuses_before_mutating_when_project_dir_unknown(
-    monkeypatch, tmp_path, capsys
+    monkeypatch, tmp_path
 ):
     """No writable directory -> refuse *before* touching the project, so there is
-    no quantized-but-unpersisted half-state."""
+    no quantized-but-unpersisted half-state - and exit non-zero, since nothing
+    the user asked for happened."""
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)  # not the project dir
     calls = _stub_quantize(monkeypatch, stem="song", name="chords")
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
 
-    rb._quantize_open_project(None, verbose=False)
+    with pytest.raises(SystemExit, match="Could not locate"):
+        rb._quantize_open_project(None, verbose=False)
 
     assert calls == [], "must not quantize when it cannot persist the result"
     assert not (tmp_path / "chords_song.txt").exists()
-    assert "Could not locate" in capsys.readouterr().err
 
 
 def test_quantize_refuses_before_mutating_when_the_project_is_ambiguous(

@@ -415,18 +415,19 @@ def test_transpose_force_requests_the_whole_track(monkeypatch, tmp_path):
 
 
 def test_transpose_refuses_before_mutating_when_project_dir_unknown(
-    monkeypatch, tmp_path, capsys
+    monkeypatch, tmp_path
 ):
     """Resolved before the project is touched, so an unwritable location is a
-    clean refusal rather than a transposed-but-unpersisted half-state."""
+    clean refusal rather than a transposed-but-unpersisted half-state - and a
+    non-zero exit, so a hotkey run is not reported "ok"."""
     monkeypatch.chdir(tmp_path)  # cwd does not hold the project
     calls = _stub_transpose(monkeypatch)
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
 
-    rebuildap._transpose_open_project(2, verbose=False)
+    with pytest.raises(SystemExit, match="Open Recent"):
+        rebuildap._transpose_open_project(2, verbose=False)
 
     assert calls == [], "must not transpose when the .txt cannot be written"
-    assert "Open Recent" in capsys.readouterr().err
 
 
 def test_transpose_refuses_before_mutating_when_the_project_is_ambiguous(

@@ -26,6 +26,10 @@ The blocked names are the places where this package actually reaches out:
                                ``git_tracking`` exists to parse git's own
                                output, which a fake would only assert against
                                our idea of it.
+- ``psutil.Process.open_files`` - which files a live process holds open, read to
+                               find the path of the project Audacity has open.
+                               Read-only, but the answer would be whatever the
+                               developer's Audacity has open at the time.
 - ``APPLICATION_DIRS``       - the /Applications scan behind the "wrong Audacity
                                version" diagnostic. Emptied rather than blocked:
                                it is read on error paths several tests exercise,
@@ -52,6 +56,7 @@ import subprocess
 import threading
 from contextlib import contextmanager
 
+import psutil
 import pytest
 
 from rebuildap import audacity_funcs as af
@@ -118,6 +123,11 @@ def no_live_audacity(request, monkeypatch):
     # Beneath osascript and the quantize_labels shell-out. Tests that legitimately
     # fake a subprocess call patch it again in their own body, which wins.
     monkeypatch.setattr(subprocess, "run", _except_git("subprocess.run"))
+    # Never the developer's real Audacity. Tests that need open files fake
+    # process_iter with processes of their own, whose open_files this does not touch.
+    monkeypatch.setattr(
+        psutil.Process, "open_files", _forbidden("psutil.Process.open_files")
+    )
     # No real /Applications, so the version diagnostic reports "nothing found"
     # by default. Tests about that diagnostic point it at a tmp_path instead.
     monkeypatch.setattr(ap, "APPLICATION_DIRS", ())

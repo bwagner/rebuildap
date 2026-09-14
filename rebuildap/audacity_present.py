@@ -527,6 +527,33 @@ def is_audacity_running():
     return False
 
 
+def open_project_paths() -> list[Path]:
+    """The ``.aup3`` files the running Audacity holds open, as full paths.
+
+    The one route to *which file* an open project is: window titles carry only the
+    stem, ``AXDocument`` is ``missing value`` and ``GetInfo`` has no project-path
+    query - but Audacity keeps each open project's SQLite database open, and drops
+    it on close (measured 2026-09-14 on 3.7.x). The ``-wal``/``-shm`` sidecars it
+    also holds are left out; only the ``.aup3`` names the project.
+
+    A set of open projects, not a window-to-path map. Empty when Audacity is not
+    running or cannot be inspected, which callers must read as "no evidence".
+    Process matching follows :func:`is_audacity_running`.
+    """
+    suffix = f".{af.AUDACITY_EXTENSION}"
+    paths = []
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            if AUDACITY_APP_NAME not in (proc.info["name"] or ""):
+                continue
+            paths.extend(
+                Path(f.path) for f in proc.open_files() if Path(f.path).suffix == suffix
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return paths
+
+
 def start_audacity() -> tuple[bool, str]:
     """Launch Audacity. Returns ``(ok, stderr)``.
 

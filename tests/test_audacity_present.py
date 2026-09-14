@@ -7,6 +7,8 @@ environment rather than driving the real app.
 
 import subprocess
 import time
+import types
+from pathlib import Path
 
 import pytest
 
@@ -722,3 +724,62 @@ def test_stale_fifos_from_a_replaced_audacity_still_name_the_version(
 
     with pytest.raises(TimeoutError, match="4.0.0"):
         ap.wait_for_audacity_ready(timeout=0.5)
+
+
+# --- open_project_paths: the exact paths of the projects Audacity holds open ---
+
+
+class _FakeProcess:
+    """Stand-in for a psutil process: a name and the files it holds open."""
+
+    def __init__(self, name, paths=(), error=None):
+        self.info = {"pid": 1, "name": name}
+        self._paths = paths
+        self._error = error
+
+    def open_files(self):
+        if self._error is not None:
+            raise self._error
+        return [
+            types.SimpleNamespace(path=str(p), fd=i) for i, p in enumerate(self._paths)
+        ]
+
+
+def _fake_processes(monkeypatch, processes):
+    monkeypatch.setattr(ap.psutil, "process_iter", lambda *a, **k: iter(processes))
+
+
+def test_open_project_paths_lists_the_aup3_files_audacity_holds_open(monkeypatch):
+    """Measured 2026-09-14: an open project shows as its .aup3 plus -wal and -shm
+    sidecars. Only the .aup3 names the project; other apps' files are not ours."""
+    project = "/Volumes/SSD/song/song.aup3"
+    _fake_processes(
+        monkeypatch,
+        [
+            _FakeProcess(
+                "Audacity",
+                [
+                    project,
+                    project + "-wal",
+                    project + "-shm",
+                    "/Users/me/Library/Application Support/audacity/audiocom_sync.db",
+                ],
+            ),
+            _FakeProcess("Finder", ["/elsewhere/other.aup3"]),
+        ],
+    )
+    assert ap.open_project_paths() == [Path(project)]
+
+
+def test_open_project_paths_is_empty_when_audacity_is_not_running(monkeypatch):
+    _fake_processes(monkeypatch, [_FakeProcess("Finder", ["/a/song.aup3"])])
+    assert ap.open_project_paths() == []
+
+
+def test_open_project_paths_skips_a_process_it_cannot_inspect(monkeypatch):
+    # Evidence that cannot be read is no evidence: the caller then refuses as before.
+    _fake_processes(
+        monkeypatch,
+        [_FakeProcess("Audacity", error=ap.psutil.AccessDenied(1))],
+    )
+    assert ap.open_project_paths() == []

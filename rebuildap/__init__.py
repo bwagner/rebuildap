@@ -538,10 +538,14 @@ def _resolve_project_dir(stem, flag):
     (``quantize``, ``transpose``) write to wherever the project actually lives,
     so the file and the just-modified project stay consistent no matter what cwd
     it was run from: cwd when it holds the project, else the single directory Audacity's
-    Open Recent reports for this stem. Refuses (returns ``None``, explaining on
-    stderr) when that directory is ambiguous (same stem in several places) or
-    unknown, so a source-of-truth file is never scattered. ``flag`` names the mode
-    in the advice, so the message says how to re-run what was actually attempted.
+    Open Recent reports for this stem. When Open Recent names several (a same-stem
+    copy elsewhere), the candidates are narrowed to the one whose ``.aup3`` Audacity
+    actually holds open (:func:`audacity_present.open_project_paths`).
+
+    Refuses with :class:`SystemExit` - a non-zero exit, since nothing the user asked
+    for happened - when the directory stays ambiguous or is unknown, so a
+    source-of-truth file is never scattered. ``flag`` names the mode in the advice,
+    so the message says how to re-run what was actually attempted.
     """
     cwd = Path.cwd()
     if af.dir_holds_project(cwd, stem):
@@ -550,24 +554,21 @@ def _resolve_project_dir(stem, flag):
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
-        print(
+        open_dirs = {p.parent for p in ap.open_project_paths() if p.stem == stem}
+        narrowed = [d for d in candidates if d in open_dirs]
+        if len(narrowed) == 1:
+            return narrowed[0]
+        listing = "\n".join(f"{_PATH_INDENT}{d}" for d in candidates)
+        raise SystemExit(
             f"The open project '{stem}' lives in more than one place; cannot tell "
-            "which to update:",
-            file=sys.stderr,
+            f"which to update:\n{listing}\n"
+            f"cd into the right one and run `rebuildap {flag}` there."
         )
-        for directory in candidates:
-            print(f"{_PATH_INDENT}{directory}", file=sys.stderr)
-        print(
-            f"cd into the right one and run `rebuildap {flag}` there.", file=sys.stderr
-        )
-        return None
-    print(
+    raise SystemExit(
         f"Could not locate the directory of the open project '{stem}' (it is not "
         "in Audacity's Open Recent), so its label file cannot be written. cd into "
-        f"the project directory and run `rebuildap {flag}` there.",
-        file=sys.stderr,
+        f"the project directory and run `rebuildap {flag}` there."
     )
-    return None
 
 
 def _quantize_open_project(beats_track=None, verbose=False, force=False):
@@ -588,8 +589,6 @@ def _quantize_open_project(beats_track=None, verbose=False, force=False):
         return
     stem = _open_project_stem_or_exit()
     out_dir = _resolve_project_dir(stem, "quantize")
-    if out_dir is None:
-        return
     try:
         target_name, _idx, reference_name, content, changed = (
             af.quantize_selected_label_track(beats_track, verbose, whole_track=force)
@@ -667,8 +666,6 @@ def _transpose_open_project(semitones, sharps=False, verbose=False, force=False)
         return
     stem = _open_project_stem_or_exit()
     out_dir = _resolve_project_dir(stem, f"transpose {semitones}")
-    if out_dir is None:
-        return
     try:
         target_name, _idx, content, changed, skipped = (
             af.transpose_selected_label_track(
