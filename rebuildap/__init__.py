@@ -292,30 +292,35 @@ def _report_other_open_projects():
         print(f"{af.LIST_BULLET}{stem}", file=sys.stderr)
 
 
-def prerequisites_met() -> bool:
+def prerequisites_met(command: str) -> bool:
     """Whether the open Audacity project can be worked with, saying why if not.
 
     Every branch reports unconditionally rather than under ``-v``: these all end
     with the command doing nothing, and a silent do-nothing run is
     indistinguishable from a broken one -- the same bug `check`'s "nothing to do"
     and a bare `export`'s silent success were both fixed for.
+
+    ``command`` names what was run, so the report says "nothing to quantize"
+    rather than a bare export's wording. Required, not defaulted: the default was
+    how `quantize` came to answer "nothing to export". Whether an unmet
+    prerequisite is an *error* is the caller's call.
     """
     if not ap.is_audacity_running():
-        print("Audacity is not running; nothing to export.", file=sys.stderr)
+        print(f"Audacity is not running; nothing to {command}.", file=sys.stderr)
         return False
     if not ap.is_audacity_window_open():
-        print("No Audacity window is open; nothing to export.", file=sys.stderr)
+        print(f"No Audacity window is open; nothing to {command}.", file=sys.stderr)
         return False
     if af.is_project_empty():
         print(
-            "The frontmost Audacity project is empty; nothing to export.",
+            f"The frontmost Audacity project is empty; nothing to {command}.",
             file=sys.stderr,
         )
         _report_other_open_projects()
         return False
     if not af.get_label_tracks():
         print(
-            "The frontmost Audacity project has no label tracks; nothing to export.",
+            f"The frontmost Audacity project has no label tracks; nothing to {command}.",
             file=sys.stderr,
         )
         _report_other_open_projects()
@@ -414,7 +419,7 @@ def _export_labels(aup3=None, verbose=False, force=False):
     ``force`` applies (see :func:`_resolve_export_dir`).
     """
     if aup3 is None:
-        if prerequisites_met():
+        if prerequisites_met("export"):
             _export_open_project_labels(verbose, force)
         return
     aup3 = Path(aup3)
@@ -585,8 +590,10 @@ def _quantize_open_project(beats_track=None, verbose=False, force=False):
     location we cannot write to is a clean refusal rather than a quantized-but-
     unpersisted half-state.
     """
-    if not prerequisites_met():
-        return
+    if not prerequisites_met("quantize"):
+        # Already explained on stderr. Unlike a bare export, an in-place command
+        # that changed nothing has failed - and the hotkey titles exit 0 "ok".
+        raise SystemExit(1)
     stem = _open_project_stem_or_exit()
     out_dir = _resolve_project_dir(stem, "quantize")
     try:
@@ -662,8 +669,8 @@ def _transpose_open_project(semitones, sharps=False, verbose=False, force=False)
 
     ``sharps`` (``-s``) opts out of the flat spelling ``transpose`` defaults to.
     """
-    if not prerequisites_met():
-        return
+    if not prerequisites_met("transpose"):
+        raise SystemExit(1)  # explained on stderr; see _quantize_open_project
     stem = _open_project_stem_or_exit()
     out_dir = _resolve_project_dir(stem, f"transpose {semitones}")
     try:

@@ -803,7 +803,7 @@ def _stub_quantize(
     import rebuildap as rb
 
     calls = []
-    monkeypatch.setattr(rb, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(rb, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: stem)
 
     def fake_quantize(ref, verbose, whole_track=False):
@@ -957,6 +957,28 @@ def test_every_quantize_outcome_names_the_reference_track(
     assert "'beats_half'" in out
 
 
+def test_quantize_exits_nonzero_when_there_is_nothing_to_quantize(monkeypatch):
+    """An empty project, no label tracks, no Audacity: the command changed nothing
+    it was asked to change, so it fails - the hotkey titles exit 0 "ok"."""
+    import rebuildap as rb
+
+    seen = []
+    monkeypatch.setattr(
+        rb, "prerequisites_met", lambda command: seen.append(command) or False
+    )
+    monkeypatch.setattr(
+        af,
+        "quantize_selected_label_track",
+        lambda *a, **k: pytest.fail("must not quantize"),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        rb._quantize_open_project(None, verbose=False)
+
+    assert excinfo.value.code not in (0, None)
+    assert seen == ["quantize"]
+
+
 def test_quantize_force_flag_requests_whole_track(monkeypatch, tmp_path):
     import rebuildap as rb
 
@@ -974,7 +996,7 @@ def test_selection_read_failure_exits_pointing_at_force(monkeypatch, tmp_path):
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "song.aup3").write_text("")
-    monkeypatch.setattr(rb, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(rb, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: "song")
 
     def boom(ref, verbose, whole_track=False):

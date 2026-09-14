@@ -132,6 +132,9 @@ it.
 A refusal changes nothing, explains itself, and **exits with status 1** - so a keyboard
 shortcut reports it as failed, not "ok". They refuse when:
 
+- **There is nothing to work on**: Audacity is not running, no window is open, or the
+  frontmost project is empty or has no label tracks. The message names the command,
+  e.g. "The frontmost Audacity project is empty; nothing to quantize."
 - **Several projects are open** and the frontmost window is not one of them (a dialog in
   front, say).
 - **Not exactly one label track** is selected.
@@ -141,6 +144,5 @@ shortcut reports it as failed, not "ok". They refuse when:
   open.
 - **The selection cannot be read.** The message points at `-f`, which skips the read.
 
-One exception exits with status 0: when there is nothing to work on at all - Audacity
-not running, no window, an empty project, or a project without label tracks. That is
-reported on stderr as "nothing to export".
+A bare `rebuildap export` differs on the first point: with nothing to export it says so
+and exits with status 0, since there it is a conclusion rather than a failed request.

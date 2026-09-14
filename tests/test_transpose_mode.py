@@ -362,7 +362,7 @@ def _stub_transpose(
     """Fake the live layer for _transpose_open_project, recording the arguments it
     was called with so the CLI-to-orchestrator wiring can be asserted."""
     calls = []
-    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: stem)
 
     def fake(semitones, prefer_flats=True, verbose=False, whole_track=False):
@@ -414,6 +414,24 @@ def test_transpose_force_requests_the_whole_track(monkeypatch, tmp_path):
     assert calls[0]["whole_track"] is True
 
 
+def test_transpose_exits_nonzero_when_there_is_nothing_to_transpose(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        rebuildap, "prerequisites_met", lambda command: seen.append(command) or False
+    )
+    monkeypatch.setattr(
+        af,
+        "transpose_selected_label_track",
+        lambda *a, **k: pytest.fail("must not transpose"),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        rebuildap._transpose_open_project(2, verbose=False)
+
+    assert excinfo.value.code not in (0, None)
+    assert seen == ["transpose"]
+
+
 def test_transpose_refuses_before_mutating_when_project_dir_unknown(
     monkeypatch, tmp_path
 ):
@@ -452,7 +470,7 @@ def test_transpose_refuses_before_mutating_when_the_project_is_ambiguous(
 def test_selection_read_failure_exits_pointing_at_force(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "song.aup3").write_text("")
-    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: "song")
 
     def boom(*a, **k):

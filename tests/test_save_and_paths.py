@@ -543,7 +543,7 @@ def _stub_open_project(monkeypatch, stem, selected):
     reports `stem` with `selected` label-track indices."""
     import rebuildap
 
-    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda: True)
+    monkeypatch.setattr(rebuildap, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda: stem)
     monkeypatch.setattr(af, "get_selected_label_track_indices", lambda: selected)
 
@@ -1193,14 +1193,14 @@ def test_prerequisites_not_met_when_audacity_not_running(monkeypatch):
     import rebuildap
 
     _all_prerequisites(monkeypatch, running=False)
-    assert rebuildap.prerequisites_met() is False
+    assert rebuildap.prerequisites_met("export") is False
 
 
 def test_prerequisites_met_when_everything_present(monkeypatch):
     import rebuildap
 
     _all_prerequisites(monkeypatch, running=True)
-    assert rebuildap.prerequisites_met() is True
+    assert rebuildap.prerequisites_met("export") is True
 
 
 # Every one of these used to be gated behind -v, so the whole command returned
@@ -1229,8 +1229,55 @@ def test_every_unmet_prerequisite_says_so_without_verbose(
     target = ap if failing.startswith("is_audacity") else af
     monkeypatch.setattr(target, failing, lambda: failing == "is_project_empty")
 
-    assert rebuildap.prerequisites_met() is False
+    assert rebuildap.prerequisites_met("export") is False
     assert expected in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "failing",
+    [
+        "is_audacity_running",
+        "is_audacity_window_open",
+        "is_project_empty",
+        "get_label_tracks",
+    ],
+)
+@pytest.mark.parametrize("command", ["export", "quantize", "transpose"])
+def test_an_unmet_prerequisite_names_the_command_that_was_run(
+    monkeypatch, capsys, failing, command
+):
+    """The quantize hotkey on an empty project used to answer "nothing to export",
+    wording left over from when a bare export was the only caller."""
+    import rebuildap
+    from rebuildap import audacity_present as ap
+
+    _all_prerequisites(monkeypatch, running=True)
+    monkeypatch.setattr(af, "_open_project_aup3_stems", lambda: [])
+    target = ap if failing.startswith("is_audacity") else af
+    monkeypatch.setattr(target, failing, lambda: failing == "is_project_empty")
+
+    assert rebuildap.prerequisites_met(command) is False
+    err = capsys.readouterr().err
+    assert f"nothing to {command}" in err
+    others = {"export", "quantize", "transpose"} - {command}
+    assert not any(f"nothing to {other}" in err for other in others)
+
+
+def test_export_without_a_file_still_exits_zero_when_there_is_nothing_to_export(
+    monkeypatch,
+):
+    """For a bare export, "nothing to export" is a conclusion, not an error
+    (decisions.md 2026-07-28 12:00) - unlike the in-place commands."""
+    import rebuildap
+
+    seen = []
+    monkeypatch.setattr(
+        rebuildap, "prerequisites_met", lambda command: seen.append(command) or False
+    )
+
+    rebuildap._export_labels(None)  # returns; no SystemExit
+
+    assert seen == ["export"]
 
 
 def test_an_empty_frontmost_project_points_at_the_other_open_projects(
@@ -1244,7 +1291,7 @@ def test_an_empty_frontmost_project_points_at_the_other_open_projects(
     monkeypatch.setattr(af, "is_project_empty", lambda: True)
     monkeypatch.setattr(af, "_open_project_aup3_stems", lambda: ["song", "song_G"])
 
-    assert rebuildap.prerequisites_met() is False
+    assert rebuildap.prerequisites_met("export") is False
 
     err = capsys.readouterr().err
     assert "frontmost" in err
@@ -1260,7 +1307,7 @@ def test_no_other_projects_means_no_pointless_hint(monkeypatch, capsys):
     monkeypatch.setattr(af, "is_project_empty", lambda: True)
     monkeypatch.setattr(af, "_open_project_aup3_stems", lambda: [])
 
-    assert rebuildap.prerequisites_met() is False
+    assert rebuildap.prerequisites_met("export") is False
     assert "bring the one you mean" not in capsys.readouterr().err.lower()
 
 
