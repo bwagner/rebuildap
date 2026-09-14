@@ -16,7 +16,7 @@ construction. No project name, no path, no cwd.
 
 | command | bindable | why |
 |---|---|---|
-| `quantize` | yes | Writes into the project's own directory, resolved from the project stem. Independent of the working directory. |
+| `quantize` | yes | Writes into the project's own directory, found without the working directory (see [where the .txt is written](in-place-commands.md#where-the-txt-is-written)). |
 | `transpose` | yes, via a picker | Same directory rule, but it takes two knobs (`SEMITONES` and `-s/--sharps`) and is **cumulative**, so it wants a selection step rather than a bare keypress — see [Transpose: pick the interval](#transpose-pick-the-interval). |
 | `export` (no argument) | **no** | Writes into the **current directory**. A hotkey has no meaningful cwd, so the files would land wherever the launcher happened to start. |
 | `build`, `import` | no | Both start from a file you have to name; there is nothing for a shortcut to infer. |

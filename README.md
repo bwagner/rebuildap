@@ -79,8 +79,8 @@ There are six commands:
 | `export [AUP3]` | the project's label tracks are exported to individual `.txt` files; with no argument, the running Audacity project's are |
 | `check [AUP3]` | the project's label tracks are compared against the versioned `.txt` files, and any label file not committed to git is named |
 | `import LABELFILE` | one label file is added to the open project as a label track |
-| `quantize [BEATS_TRACK]` | the open project's selected label track is snapped to a beats track, in place |
-| `transpose SEMITONES` | the open project's selected label track has its chords transposed, in place |
+| `quantize [BEATS_TRACK]` | the open project's selected label track is snapped to a beats track, in place ([details](docs/in-place-commands.md)) |
+| `transpose SEMITONES` | the open project's selected label track has its chords transposed, in place ([details](docs/in-place-commands.md)) |
 
 `rebuildap` on its own means `rebuildap export`, so the common case stays a
 single word.
@@ -353,6 +353,9 @@ change something and wondering why it's written that way:
   the cold-start crash, which window gets closed and why it's never blind, modal
   dialogs that wedge the scripting pipe, and what window titles can and can't
   tell you.
+- [Changing label tracks in place](docs/in-place-commands.md) - how `quantize` and
+  `transpose` scope to the time selection, which beats track `quantize` snaps to,
+  where the `.txt` is written, and when they refuse.
 - [Exporting label tracks](docs/label-export.md) — the two available export
   paths, their precision difference, and why the interactive one was retired.
 - [Running rebuildap from a keyboard shortcut](docs/hotkeys.md) — optional; which
