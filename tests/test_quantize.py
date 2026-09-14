@@ -54,11 +54,12 @@ def test_resolves_selected_target_and_named_reference():
         _track("chords", selected=True),
         _track("beats"),
     ]
-    target_i, target_name, ref_i, ref_name = af.resolve_quantize_targets(
+    target_i, target_name, ref_i, ref_name, passed_over = af.resolve_quantize_targets(
         tracks, reference_name="beats"
     )
     assert (target_i, target_name) == (1, "chords")
     assert (ref_i, ref_name) == (2, "beats")
+    assert passed_over == []
 
 
 def test_autodetects_the_sole_beats_track_when_no_name_given():
@@ -67,8 +68,11 @@ def test_autodetects_the_sole_beats_track_when_no_name_given():
         _track("chords", selected=True),
         _track("beats"),
     ]
-    _, _, ref_i, ref_name = af.resolve_quantize_targets(tracks, reference_name=None)
+    _, _, ref_i, ref_name, passed_over = af.resolve_quantize_targets(
+        tracks, reference_name=None
+    )
     assert (ref_i, ref_name) == (2, "beats")
+    assert passed_over == [], "a sole beats track involves no choice"
 
 
 def test_no_selected_label_track_is_an_error():
@@ -99,14 +103,73 @@ def test_autodetect_with_no_beats_track_is_an_error():
         af.resolve_quantize_targets(tracks, reference_name=None)
 
 
-def test_autodetect_with_multiple_beats_tracks_is_an_error():
+def test_autodetect_with_several_beats_tracks_uses_the_nearest_below_the_target():
+    # Beats tracks are a quantizing technicality kept under the tracks that
+    # matter, so the one directly beneath wins. 'beats_above' is *closer* by
+    # distance (1 row vs 2), which is what rules out "nearest either way"; and
+    # 'beats_far' rules out "bottommost".
+    tracks = [
+        _track("song", kind="wave"),
+        _track("beats_above"),
+        _track("chords", selected=True),
+        _track("parts"),
+        _track("beats_near"),
+        _track("beats_far"),
+    ]
+    _, _, ref_i, ref_name, passed_over = af.resolve_quantize_targets(
+        tracks, reference_name=None
+    )
+    assert (ref_i, ref_name) == (4, "beats_near")
+    assert passed_over == ["beats_above", "beats_far"]
+
+
+def test_autodetect_ignores_non_label_tracks_named_like_beats():
+    # An audio track called 'beats' is not a grid to snap to.
+    tracks = [
+        _track("chords", selected=True),
+        _track("beats_audio", kind="wave"),
+        _track("beats"),
+        _track("beats_alt"),
+    ]
+    _, _, ref_i, ref_name, _ = af.resolve_quantize_targets(tracks, reference_name=None)
+    assert (ref_i, ref_name) == (2, "beats")
+
+
+def test_autodetect_with_several_beats_tracks_none_below_is_an_error():
+    # The layout breaks the convention; refuse visibly rather than fall back to
+    # one above, and name the candidates.
+    tracks = [
+        _track("beats"),
+        _track("beats_alt"),
+        _track("chords", selected=True),
+    ]
+    with pytest.raises(af.QuantizeError, match="below 'chords'") as excinfo:
+        af.resolve_quantize_targets(tracks, reference_name=None)
+    assert "beats_alt" in str(excinfo.value)
+
+
+def test_a_sole_beats_track_above_the_target_is_still_used():
+    # The nearest-below rule only settles a choice among several; one beats track
+    # is unambiguous wherever it sits.
+    tracks = [_track("beats"), _track("chords", selected=True)]
+    _, _, ref_i, ref_name, passed_over = af.resolve_quantize_targets(
+        tracks, reference_name=None
+    )
+    assert (ref_i, ref_name) == (0, "beats")
+    assert passed_over == []
+
+
+def test_a_named_reference_wins_over_the_nearest_below():
     tracks = [
         _track("chords", selected=True),
         _track("beats"),
         _track("beats_alt"),
     ]
-    with pytest.raises(af.QuantizeError, match="[Mm]ultiple|-q"):
-        af.resolve_quantize_targets(tracks, reference_name=None)
+    _, _, ref_i, ref_name, passed_over = af.resolve_quantize_targets(
+        tracks, reference_name="beats_alt"
+    )
+    assert (ref_i, ref_name) == (2, "beats_alt")
+    assert passed_over == [], "naming the track is not a choice made for the user"
 
 
 def test_reference_cannot_be_the_target_itself():
@@ -210,8 +273,8 @@ def test_quantize_swaps_track_in_the_safe_order(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(af, "select_tracks", lambda idx: events.append(f"select:{idx}"))
 
-    target_name, target_index, content, changed = af.quantize_selected_label_track(
-        reference_name=None
+    target_name, target_index, _ref, content, changed = (
+        af.quantize_selected_label_track(reference_name=None)
     )
 
     assert (target_name, target_index, changed) == ("chords", 1, True)
@@ -256,7 +319,7 @@ def test_quantize_skips_the_swap_when_already_quantized(monkeypatch, tmp_path):
     monkeypatch.setattr(af, "move_track_to", lambda *a: events.append("move"))
     monkeypatch.setattr(af, "select_tracks", lambda *a: events.append("select"))
 
-    _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
+    _, _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
 
     assert changed is False
     assert events == [], "already-quantized track must not touch the project"
@@ -411,6 +474,56 @@ def _orchestrator_with_quantized(monkeypatch, tmp_path, current, quantized_out):
     monkeypatch.setattr(af, "select_tracks", lambda *a: None)
 
 
+def test_quantize_returns_the_reference_it_snapped_to(monkeypatch, tmp_path):
+    current = af._format_track_txt([(1.0, 2.0, "a")])
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, "1.1\t2.1\ta\n")
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))
+
+    _, _, reference_name, _, _ = af.quantize_selected_label_track(reference_name=None)
+
+    assert reference_name == "beats"
+
+
+def test_choosing_among_several_beats_tracks_is_announced_on_stderr(
+    monkeypatch, tmp_path, capsys
+):
+    """The hotkey alerts on a successful run that wrote to stderr, so a choice made
+    for the user must land there - naming what was used and what was passed over."""
+    current = af._format_track_txt([(1.0, 2.0, "a")])
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, "1.1\t2.1\ta\n")
+    tracks = [
+        _track("song", kind="wave"),
+        _track("chords", selected=True),
+        _track("beats"),
+        _track("beats_alt"),
+    ]
+    monkeypatch.setattr(af, "get_tracks", lambda: tracks)
+    grid = af._format_track_txt([(0.0, 0.0, "")])
+    monkeypatch.setattr(
+        af,
+        "get_label_tracks_content_via_getinfo",
+        lambda: {"chords": current, "beats": grid, "beats_alt": grid},
+    )
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))
+
+    af.quantize_selected_label_track(reference_name=None)
+
+    err = capsys.readouterr().err
+    assert "'beats'" in err
+    assert "beats_alt" in err
+
+
+def test_a_sole_beats_track_is_not_announced(monkeypatch, tmp_path, capsys):
+    """No choice, no note: otherwise every hotkey quantize would raise an alert."""
+    current = af._format_track_txt([(1.0, 2.0, "a")])
+    _orchestrator_with_quantized(monkeypatch, tmp_path, current, "1.1\t2.1\ta\n")
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))
+
+    af.quantize_selected_label_track(reference_name=None)
+
+    assert capsys.readouterr().err == ""
+
+
 def test_only_boundaries_inside_the_selection_are_snapped(monkeypatch, tmp_path):
     current = af._format_track_txt([(1.0, 2.0, "a"), (5.0, 6.0, "b")])
     # quantize_labels would snap everything; the temp holds the fully-snapped form.
@@ -419,7 +532,7 @@ def test_only_boundaries_inside_the_selection_are_snapped(monkeypatch, tmp_path)
     # Selection [4.0, 7.0]: only 'b' is inside -> only its boundaries move.
     monkeypatch.setattr(af, "read_time_selection", lambda: (4.0, 7.0))
 
-    _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
+    _, _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
 
     assert changed is True
     assert content == af._format_track_txt([(1.0, 2.0, "a"), (5.1, 6.1, "b")])
@@ -431,7 +544,7 @@ def test_no_region_quantizes_the_whole_track(monkeypatch, tmp_path):
     _orchestrator_with_quantized(monkeypatch, tmp_path, current, quantized)
     monkeypatch.setattr(af, "read_time_selection", lambda: (3.0, 3.0))  # cursor only
 
-    _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
+    _, _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
 
     assert content == af._format_track_txt([(1.1, 2.1, "a"), (5.1, 6.1, "b")])
 
@@ -445,7 +558,7 @@ def test_force_whole_track_skips_the_selection_read(monkeypatch, tmp_path):
 
     monkeypatch.setattr(af, "read_time_selection", boom)
 
-    _, _, content, _ = af.quantize_selected_label_track(
+    _, _, _, content, _ = af.quantize_selected_label_track(
         reference_name="beats", whole_track=True
     )
     assert content == af._format_track_txt([(1.1, 2.1, "a")])
@@ -494,7 +607,7 @@ def test_quantized_content_is_canonical_six_decimal(monkeypatch, tmp_path):
     monkeypatch.setattr(af, "move_track_to", lambda *a: None)
     monkeypatch.setattr(af, "select_tracks", lambda *a: None)
 
-    _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
+    _, _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
     assert content == "0.000000\t1.000000\tverse\n"
 
 
@@ -606,7 +719,12 @@ def test_resolve_project_dir_refuses_when_unknown(monkeypatch, tmp_path, capsys)
 
 
 def _stub_quantize(
-    monkeypatch, stem="song", name="chords", content="0.0\t1.0\tv\n", changed=True
+    monkeypatch,
+    stem="song",
+    name="chords",
+    content="0.0\t1.0\tv\n",
+    changed=True,
+    reference="beats",
 ):
     """Fake the live layer for _quantize_open_project. Returns a list recording
     whether the (mutating) quantize step ran, so refusal tests can assert it did
@@ -619,7 +737,7 @@ def _stub_quantize(
 
     def fake_quantize(ref, verbose, whole_track=False):
         calls.append(f"quantized:whole={whole_track}")
-        return (name, 1, content, changed)
+        return (name, 1, reference, content, changed)
 
     monkeypatch.setattr(af, "quantize_selected_label_track", fake_quantize)
     return calls
@@ -722,7 +840,7 @@ def test_quantize_does_not_rewrite_an_already_current_file(
     rb._quantize_open_project(None, verbose=False)
 
     assert existing.read_text() == "0.0\t1.0\tv\n", "equivalent file must be untouched"
-    assert "already quantized; nothing to do" in capsys.readouterr().out
+    assert "already quantized to 'beats'; nothing to do" in capsys.readouterr().out
 
 
 def test_quantize_updates_a_stale_file_even_if_the_track_was_already_quantized(
@@ -742,7 +860,29 @@ def test_quantize_updates_a_stale_file_even_if_the_track_was_already_quantized(
     rb._quantize_open_project(None, verbose=False)
 
     assert existing.read_text() == "0.000000\t1.000000\tv\n"
-    assert "was already quantized; updated its file" in capsys.readouterr().out
+    assert (
+        "was already quantized to 'beats'; updated its file" in capsys.readouterr().out
+    )
+
+
+@pytest.mark.parametrize(
+    "changed, wrote",
+    [(True, True), (False, False), (False, True), (True, False)],
+)
+def test_every_quantize_outcome_names_the_reference_track(
+    capsys, tmp_path, changed, wrote
+):
+    """Snapping to the wrong grid looks plausible at a glance, so every outcome says
+    which grid it was - whether or not a choice among several was made."""
+    import rebuildap as rb
+
+    rb._report_quantize_outcome(
+        "chords", "beats_half", tmp_path / "chords_song.txt", changed, wrote
+    )
+
+    out = capsys.readouterr().out
+    assert "'chords'" in out
+    assert "'beats_half'" in out
 
 
 def test_quantize_force_flag_requests_whole_track(monkeypatch, tmp_path):

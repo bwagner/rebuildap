@@ -1388,21 +1388,29 @@ def _is_beats_track_name(name: str) -> bool:
 
 def resolve_quantize_targets(
     tracks: List[Dict], reference_name: Optional[str] = None
-) -> Tuple[int, str, int, str]:
+) -> Tuple[int, str, int, str, List[str]]:
     """Decide which track to quantize and which to quantize against.
 
-    Returns ``(target_index, target_name, reference_index, reference_name)``.
+    Returns ``(target_index, target_name, reference_index, reference_name,
+    passed_over)``.
 
     - **target**: the single *selected* label track, via the shared
       :func:`resolve_selected_label_track` (raising :class:`LabelTrackError`).
     - **reference**: the label track named ``reference_name`` when given, else
-      the sole label track whose name looks like a beats track. Missing,
-      ambiguous, or coinciding with the target all raise :class:`QuantizeError`.
+      the sole label track whose name looks like a beats track, else - when
+      there are several - the **nearest one below the target**. Beats tracks are
+      a quantizing technicality kept under the tracks that matter, so stacked at
+      the bottom their order is the precedence. Several with none below, a
+      missing or ambiguous name, or a reference coinciding with the target all
+      raise :class:`QuantizeError`.
+    - **passed_over**: the other beats tracks, in track order, when a choice among
+      several was made for the user; empty otherwise. The caller announces it.
 
     Pure over the ``tracks`` list, so every branch is exercised offline.
     """
     label_tracks = _label_tracks(tracks)
     target_index, target_name = resolve_selected_label_track(tracks)
+    passed_over: List[str] = []
 
     if reference_name is None:
         beats = [
@@ -1413,13 +1421,23 @@ def resolve_quantize_targets(
                 "No beats label track found to quantize against; name one "
                 "explicitly with `rebuildap quantize <track>`."
             )
-        if len(beats) > 1:
-            names = ", ".join(t[PROPERTY_NAME] for _, t in beats)
-            raise QuantizeError(
-                f"Multiple beats label tracks found ({names}); name the one to "
-                "use with `rebuildap quantize <track>`."
-            )
-        reference_index, reference = beats[0]
+        if len(beats) == 1:
+            reference_index, reference = beats[0]
+        else:
+            below = [(i, t) for i, t in beats if i > target_index]
+            if not below:
+                names = ", ".join(t[PROPERTY_NAME] for _, t in beats)
+                raise QuantizeError(
+                    f"Multiple beats label tracks found ({names}), but none below "
+                    f"'{target_name}'; move one below it, or name the one to use "
+                    "with `rebuildap quantize <track>`."
+                )
+            reference_index, reference = below[0]
+            passed_over = [
+                t[PROPERTY_NAME]
+                for i, t in beats
+                if i not in (reference_index, target_index)
+            ]
     else:
         matches = [
             (i, t) for i, t in label_tracks if t[PROPERTY_NAME] == reference_name
@@ -1441,7 +1459,13 @@ def resolve_quantize_targets(
             "track; select the track to quantize and keep the beats track as "
             "the reference."
         )
-    return target_index, target_name, reference_index, reference[PROPERTY_NAME]
+    return (
+        target_index,
+        target_name,
+        reference_index,
+        reference[PROPERTY_NAME],
+        passed_over,
+    )
 
 
 def locate_quantize_script() -> Path:
@@ -1477,13 +1501,16 @@ def quantize_selected_label_track(
     reference_name: Optional[str] = None,
     verbose: bool = False,
     whole_track: bool = False,
-) -> Tuple[str, int, str, bool]:
+) -> Tuple[str, int, str, str, bool]:
     """Quantize the selected label track to a beats track, in place.
 
-    Returns ``(target_name, target_index, quantized_content, changed)`` --
-    the quantized track's name, the position it was restored to, the quantized
-    labels in canonical ``.txt`` form (for the caller to write as the versioned
-    source of truth), and whether the project was actually modified. Raises
+    Returns ``(target_name, target_index, reference_name, quantized_content,
+    changed)`` -- the quantized track's name, the position it was restored to,
+    the beats track it was snapped to, the quantized labels in canonical ``.txt``
+    form (for the caller to write as the versioned source of truth), and whether
+    the project was actually modified. When the reference was chosen among
+    several beats tracks, that choice is announced on stderr before anything is
+    touched (see :func:`resolve_quantize_targets`). Raises
     :class:`QuantizeError` on any precondition failure. See the module section
     header for the flow.
 
@@ -1503,9 +1530,17 @@ def quantize_selected_label_track(
     entirely -- the project is left byte-identical -- and ``changed`` is ``False``.
     """
     tracks = get_tracks()
-    target_index, target_name, _reference_index, reference_name = (
+    target_index, target_name, _reference_index, reference_name, passed_over = (
         resolve_quantize_targets(tracks, reference_name)
     )
+    if passed_over:
+        # stderr, because a hotkey run alerts on a successful run that wrote there:
+        # a grid chosen for the user must not pass unseen.
+        print(
+            f"Using beats track '{reference_name}', the nearest below "
+            f"'{target_name}' (passed over: {', '.join(passed_over)}).",
+            file=sys.stderr,
+        )
     contents = get_label_tracks_content_via_getinfo()
     script = locate_quantize_script()
 
@@ -1557,7 +1592,7 @@ def quantize_selected_label_track(
     changed = replace_label_track(
         target_index, target_name, quantized_content, contents[target_name]
     )
-    return target_name, target_index, quantized_content, changed
+    return target_name, target_index, reference_name, quantized_content, changed
 
 
 def _write_temp_label_txt(content: str) -> Path:

@@ -59,7 +59,10 @@ local CHOOSER_ROWS = 8
 -- happens for every app whenever the system considers the display shared, and did so
 -- unnoticed for hours on 2026-07-29 (see ~/.claude/macos-notifications.md). Without
 -- it, a failed run and a successful one look identical: both show only the start
--- alert. Success stays notification-only; an alert per success would be noise.
+-- alert. A plain success stays notification-only; an alert per success would be
+-- noise. A success that wrote to stderr gets one too: rebuildap uses stderr for
+-- "I decided something you should know" (e.g. which of several beats tracks
+-- quantize chose) and for "nothing done, here is why" - neither should pass unseen.
 local FAILURE_ALERT_SECONDS = 6
 local FAILURE_ALERT_MAX_CHARS = 120
 
@@ -158,7 +161,11 @@ function M.exec(args)
   local task = hs.task.new(binary, function(rc, stdout, stderr)
     local body = (stdout or "") .. (stderr or "")
     if rc == 0 then
-      report("rebuildap " .. label .. " - ok", body)
+      local title = "rebuildap " .. label .. " - ok"
+      report(title, body)
+      if (stderr or ""):match("%S") then
+        hs.alert.show(title .. "\n" .. firstLine(stderr), FAILURE_ALERT_SECONDS)
+      end
     else
       local title = "rebuildap " .. label .. " - failed (exit " .. tostring(rc) .. ")"
       report(title, body)

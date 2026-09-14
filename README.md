@@ -237,8 +237,10 @@ the open project, re-import it at its original position, and update its
 versioned .txt to match.
 
 positional arguments:
-  BEATS_TRACK    Label track to snap to. Omit to auto-detect it: the sole
-                 label track whose name starts with 'beat' (case-insensitive).
+  BEATS_TRACK    Label track to snap to. Omit to auto-detect it: a label track
+                 whose name starts with 'beat' (case-insensitive) - the only
+                 one, or with several, the nearest one below the selected
+                 track.
 
 options:
   -h, --help     show this help message and exit

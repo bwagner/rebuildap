@@ -133,7 +133,7 @@ the result. Either way it is appended to `~/.hammerspoon/rebuildap.log`:
 
 ```
 2026-07-28 23:47:47  rebuildap quantize - ok
-Label track 'chords' was already quantized; updated its file:
+Label track 'chords' was already quantized to 'beats'; updated its file:
   /path/to/project/chords_<stem>.txt
 ```
 
@@ -154,8 +154,19 @@ rebuildap quantize - failed (exit 1)
 Select exactly one label track; 2 are selected (parts, chords).
 ```
 
-Success stays notification-and-log only - an alert per successful run would be noise,
-and a run that quietly did nothing is the case the log exists for.
+A plain success stays notification-and-log only - an alert per successful run would be
+noise. A success that **wrote to stderr** does get an alert, showing the first stderr
+line: rebuildap puts decisions made on your behalf there, and explanations of why it
+did nothing. The case you will meet most is `quantize` in a project with several beats
+tracks, where it uses the nearest one below the selected track and says so:
+
+```
+rebuildap quantize - ok
+Using beats track 'beats', the nearest below 'chords' (passed over: beats_half).
+```
+
+A hotkey cannot name a beats track, so arranging them is how you choose: keep beats
+tracks under the tracks you practice with, and their order sets the precedence.
 
 ## No time region? It just does the whole track
 

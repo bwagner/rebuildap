@@ -591,8 +591,8 @@ def _quantize_open_project(beats_track=None, verbose=False, force=False):
     if out_dir is None:
         return
     try:
-        target_name, _idx, content, changed = af.quantize_selected_label_track(
-            beats_track, verbose, whole_track=force
+        target_name, _idx, reference_name, content, changed = (
+            af.quantize_selected_label_track(beats_track, verbose, whole_track=force)
         )
     except af.SelectionReadError as e:
         raise SystemExit(
@@ -605,7 +605,7 @@ def _quantize_open_project(beats_track=None, verbose=False, force=False):
         raise SystemExit(f"{e}") from e
     out_path = out_dir / af._derive_label_filename(target_name, stem)
     wrote = _write_if_divergent(out_path, content)
-    _report_quantize_outcome(target_name, out_path, changed, wrote)
+    _report_quantize_outcome(target_name, reference_name, out_path, changed, wrote)
 
 
 def _write_if_divergent(out_path, content):
@@ -626,23 +626,30 @@ def _write_if_divergent(out_path, content):
     return True
 
 
-def _report_quantize_outcome(target_name, out_path, changed, wrote):
+def _report_quantize_outcome(target_name, reference_name, out_path, changed, wrote):
     """State plainly what ``quantize`` did, across the four project-changed/file-written
     combinations -- so an already-quantized track reads as 'nothing to do', not as
-    a silent success."""
+    a silent success. Every outcome names the beats track it was snapped to, since
+    the wrong grid looks plausible at a glance."""
+    grid = f"to '{reference_name}'"
     if changed and wrote:
-        print(f"Quantized label track '{target_name}':")
+        print(f"Quantized label track '{target_name}' {grid}:")
         print(f"{_PATH_INDENT}{out_path}")
     elif not changed and not wrote:
-        print(f"Label track '{target_name}' is already quantized; nothing to do.")
+        print(
+            f"Label track '{target_name}' is already quantized {grid}; nothing to do."
+        )
     elif not changed and wrote:
         # Track was already on the grid, but its versioned file was stale.
-        print(f"Label track '{target_name}' was already quantized; updated its file:")
+        print(
+            f"Label track '{target_name}' was already quantized {grid}; "
+            "updated its file:"
+        )
         print(f"{_PATH_INDENT}{out_path}")
     else:  # changed and not wrote
         print(
-            f"Quantized label track '{target_name}'; its label file was already "
-            "up to date."
+            f"Quantized label track '{target_name}' {grid}; its label file was "
+            "already up to date."
         )
 
 
@@ -978,9 +985,10 @@ def _build_parser():
         nargs="?",
         metavar="BEATS_TRACK",
         help=(
-            "Label track to snap to. Omit to auto-detect it: the sole label "
-            f"track whose name starts with '{af.BEATS_TRACK_PREFIX}' "
-            "(case-insensitive)."
+            "Label track to snap to. Omit to auto-detect it: a label track "
+            f"whose name starts with '{af.BEATS_TRACK_PREFIX}' "
+            "(case-insensitive) - the only one, or with several, the nearest "
+            "one below the selected track."
         ),
     )
     quantize.add_argument(
