@@ -12,6 +12,18 @@ from rebuildap import audacity_funcs as af
 from rebuildap import audacity_present as ap
 
 
+def _fake_label_source(monkeypatch, contents):
+    """Fake the label read ``check`` makes, from ``.txt`` content per track name."""
+    monkeypatch.setattr(
+        af,
+        "read_label_tracks_precisely",
+        lambda source: (
+            {n: af._labels_from_txt(c) for n, c in contents.items()},
+            True,
+        ),
+    )
+
+
 @pytest.fixture
 def project(tmp_path):
     """A project dir: audio file plus two versioned label files."""
@@ -233,7 +245,7 @@ def _check_with_stubbed_audacity(monkeypatch, project, contents, **kwargs):
     monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
     monkeypatch.setattr(ap, "close_owned_window", lambda *a, **k: None)
     monkeypatch.setattr(af, "open_audio", lambda *a, **k: None)
-    monkeypatch.setattr(af, "get_label_tracks_content_via_getinfo", lambda: contents)
+    _fake_label_source(monkeypatch, contents)
     rebuildap.check_label_age(str(project), verbose=False, **kwargs)
 
 
@@ -311,7 +323,8 @@ def test_the_versioned_label_file_is_never_overwritten_by_check(
     )
 
     assert versioned.read_text() == "0.0\t1.0\tEm\n", "source of truth untouched"
-    assert (tmp_path / "chords.txt").read_text() == "0.0\t1.0\tAm\n"
+    # Written in Audacity's 6-decimal export form, as real GetInfo content was.
+    assert (tmp_path / "chords.txt").read_text() == "0.000000\t1.000000\tAm\n"
 
 
 def test_every_label_file_newer_skips_opening_audacity(monkeypatch, tmp_path, capsys):
@@ -357,10 +370,8 @@ def test_one_older_label_file_is_enough_to_open_audacity(monkeypatch, tmp_path):
     monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
     monkeypatch.setattr(ap, "close_owned_window", lambda *a, **k: None)
     monkeypatch.setattr(af, "open_audio", lambda *a, **k: opened.append(True))
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        lambda: {"parts": "0.0\t1.0\tintro\n", "chords": "0.0\t1.0\tEm\n"},
+    _fake_label_source(
+        monkeypatch, {"parts": "0.0\t1.0\tintro\n", "chords": "0.0\t1.0\tEm\n"}
     )
 
     rebuildap.check_label_age(str(project), verbose=False)
@@ -390,10 +401,9 @@ def test_check_reports_label_track_present_only_in_audacity(
     monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
     monkeypatch.setattr(ap, "close_owned_window", lambda *a, **k: None)
     monkeypatch.setattr(af, "open_audio", lambda *a, **k: None)
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        lambda: {
+    _fake_label_source(
+        monkeypatch,
+        {
             "parts": "0.0\t1.0\tintro\n",  # backed by parts_song.txt
             "chords": "0.0\t1.0\tEm\n",  # only in Audacity, no file
         },
@@ -431,11 +441,7 @@ def test_deep_check_opens_even_when_label_is_newer(monkeypatch, tmp_path):
     monkeypatch.setattr(ap, "assert_audacity", lambda *a, **k: None)
     monkeypatch.setattr(ap, "close_owned_window", lambda *a, **k: None)
     monkeypatch.setattr(af, "open_audio", lambda *a, **k: opened.append(a) or None)
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        lambda: {"parts": "0.0\t1.0\tintro\n"},
-    )
+    _fake_label_source(monkeypatch, {"parts": "0.0\t1.0\tintro\n"})
 
     rebuildap.check_label_age(str(project), verbose=False, deep=True)
 
@@ -538,14 +544,16 @@ def _menus_with(paths):
     return "\n[ " + ",\n".join(entries) + " ]\nBatchCommand finished: OK\n"
 
 
-def _stub_open_project(monkeypatch, stem, selected):
+def _stub_open_project(monkeypatch, stem, selected, open_paths=()):
     """Make the no-arg branch reachable: prerequisites pass and the open project
-    reports `stem` with `selected` label-track indices."""
+    reports `stem` with `selected` label-track indices; Audacity holds
+    `open_paths` open."""
     import rebuildap
 
     monkeypatch.setattr(rebuildap, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda: stem)
     monkeypatch.setattr(af, "get_selected_label_track_indices", lambda: selected)
+    monkeypatch.setattr(ap, "open_project_paths", lambda: list(open_paths))
 
 
 def _fail_if_exported(monkeypatch):

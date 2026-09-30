@@ -119,8 +119,8 @@ Saving also nudges the label files' mtimes up to match the new `.aup3`, so
 touched — [the reasoning is here](docs/label-export.md#why-saving-touches-label-mtimes).
 
 Label tracks are exported non-interactively through Audacity's scripting pipe, so
-batch runs never stop for a dialog. There's a small precision trade-off:
-[Exporting label tracks](docs/label-export.md).
+batch runs never stop for a dialog. Label times are read exactly from the `.aup3`,
+since the pipe rounds them: [Exporting label tracks](docs/label-export.md).
 
 ## Usage
 

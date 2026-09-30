@@ -151,7 +151,12 @@ def _check_label_age_via_getinfo(filename, label_files):
     Every label file for the project is compared -- see :func:`_any_label_file_older`
     for why there is no per-file gate.
     """
-    contents = af.get_label_tracks_content_via_getinfo()
+    # Exact times from the checked .aup3 itself; GetInfo's rounding only as a
+    # fallback, which says so on stderr (see read_label_tracks_precisely).
+    labels_by_name, precise = af.read_label_tracks_precisely(Path(filename))
+    contents = {
+        name: af._format_track_txt(labels) for name, labels in labels_by_name.items()
+    }
     # One git call for the whole set, ahead of the loop. `unversioned` answers
     # None outside a repository, which collapses to "no note on any line".
     git_reasons = git_tracking.unversioned(label_files) or {}
@@ -166,10 +171,14 @@ def _check_label_age_via_getinfo(filename, label_files):
         if expected is None:
             print(f"No matching label track for {label_file.name}; skipping.")
             continue
-        labels_from_file = process_lines(
-            label_file.read_text().splitlines(keepends=True)
-        )
+        file_text = label_file.read_text()
+        labels_from_file = process_lines(file_text.splitlines(keepends=True))
         labels_from_proj = process_lines(expected.splitlines(keepends=True))
+        if not precise and _same_labels_as_getinfo_shows(file_text, expected):
+            # A rounded read cannot see below its rounding: a file whose times
+            # round to it holds the same labels, not different ones.
+            labels_from_proj = labels_from_file
+            expected = file_text
         _report_diff(
             label_file,
             short_name,
@@ -432,7 +441,7 @@ def _export_labels(aup3=None, verbose=False, force=False):
     _open_in_audacity(aup3, verbose)
     if verbose:
         print(f"exporting labels from Audacity project ({aup3.name})")
-    af.export_label_tracks_via_getinfo(aup3)
+    af.export_label_tracks_via_getinfo(aup3, source=aup3)
     # TODO: export audio tracks, same naming scheme as labels (but ending in mp3)
     #       song track: "orig"
     #       other tracks: guitar (etc.)
@@ -522,15 +531,16 @@ def _export_open_project_labels(verbose, force=False):
     stem = _open_project_stem_or_exit()
     if _resolve_export_dir(stem, force) is None:
         return
+    source = _open_project_file(stem, ap.open_project_paths())
 
     if af.get_selected_label_track_indices():
         if verbose:
             print("exporting selected label track")
-        exported = af.export_selected_label_tracks_via_getinfo(stem=stem)
+        exported = af.export_selected_label_tracks_via_getinfo(stem=stem, source=source)
     else:
         if verbose:
             print("exporting all label tracks")
-        exported = af.export_label_tracks_via_getinfo(stem=stem)
+        exported = af.export_label_tracks_via_getinfo(stem=stem, source=source)
     # Reported unconditionally, not only under -v: a silent export looked
     # like nothing happened. Names each track and the full path written.
     _report_exports(exported)
@@ -657,32 +667,6 @@ def _write_if_divergent(out_path, content, rounded=False):
     return True
 
 
-def _with_times_from(existing, content):
-    """``content`` with the times of ``existing`` put back, when ``content``'s
-    times are GetInfo's rounding of them; else ``content`` unchanged.
-
-    For a ``transpose`` whose label read fell back to GetInfo: its times are
-    rounded, but it only changed texts, so the versioned file's exact times still
-    hold. Needs the same number of labels, each existing time rounding to the new
-    one. Unparseable content is left as it is.
-    """
-    try:
-        old = af._labels_from_txt(existing)
-        new = af._labels_from_txt(content)
-    except (ValueError, IndexError):
-        return content
-    shown = af._as_getinfo_shows
-    if len(old) != len(new) or any(
-        shown(o_start) != shown(n_start) or shown(o_end) != shown(n_end)
-        for (o_start, o_end, _), (n_start, n_end, _) in zip(old, new)
-    ):
-        return content
-    return af._format_track_txt(
-        (o_start, o_end, n_text)
-        for (o_start, o_end, _), (_, _, n_text) in zip(old, new)
-    )
-
-
 def _same_labels_as_getinfo_shows(a, b):
     """Whether two label ``.txt`` contents hold the same labels once their times
     are rounded the way GetInfo rounds them. Unparseable content is never equal."""
@@ -763,7 +747,7 @@ def _transpose_open_project(semitones, sharps=False, verbose=False, force=False)
         raise SystemExit(f"{e}") from e
     out_path = out_dir / af._derive_label_filename(target_name, stem)
     if not precise and out_path.exists():
-        content = _with_times_from(out_path.read_text(), content)
+        content = af._with_times_from(out_path.read_text(), content)
     wrote = _write_if_divergent(out_path, content, rounded=not precise)
     _report_transpose_outcome(
         target_name, out_path, semitones, not sharps, changed, wrote, skipped

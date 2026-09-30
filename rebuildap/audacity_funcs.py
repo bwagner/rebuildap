@@ -1264,7 +1264,7 @@ def read_label_tracks_precisely(
 
 
 def _write_via_getinfo(
-    indices: Iterable[int], aup3_path=None, stem=None
+    indices: Iterable[int], aup3_path=None, stem=None, source=None
 ) -> List[Tuple[str, Path]]:
     """Shared core: write one .txt per given label-track index.
 
@@ -1272,46 +1272,73 @@ def _write_via_getinfo(
     alongside the path so callers can report both without re-deriving the name
     from the filename — which is lossy, since a track name may contain the same
     underscores ``_derive_label_filename`` uses as a separator.
+
+    Label times come from ``source``, the open project's ``.aup3``, via
+    :func:`read_label_tracks_precisely` (which falls back to GetInfo's rounding,
+    saying so). A rounded read leaves a file's own exact times in place wherever
+    they round to the ones read -- see :func:`_with_times_from`.
     """
     out_dir, stem = _resolve_output_context(aup3_path, stem)
-    labels_by_idx = _parse_labels_response(pa.do("GetInfo: Type=Labels"))
+    labels_by_name, precise = read_label_tracks_precisely(source)
     names_by_idx = _label_track_names_by_idx(
         _parse_tracks_response(pa.do("GetInfo: Type=Tracks"))
     )
     written: List[Tuple[str, Path]] = []
-    wanted = set(indices)
-    for idx, labels in labels_by_idx.items():
-        if idx not in wanted:
-            continue
+    for idx in sorted(set(indices)):
         name = names_by_idx.get(idx)
-        if name is None:
+        if name is None or name not in labels_by_name:
             continue
         out_path = out_dir / _derive_label_filename(name, stem)
-        out_path.write_text(_format_track_txt(labels))
+        content = _format_track_txt(labels_by_name[name])
+        if not precise and out_path.exists():
+            content = _with_times_from(out_path.read_text(), content)
+        out_path.write_text(content)
         written.append((name, out_path))
     return written
 
 
+def _with_times_from(existing, content):
+    """``content`` with the times of ``existing`` put back, when ``content``'s
+    times are GetInfo's rounding of them; else ``content`` unchanged.
+
+    For a ``transpose`` or ``export`` whose label read fell back to GetInfo: its
+    times are rounded, but nothing moved them, so the versioned file's exact
+    times still hold. Needs the same number of labels, each existing time rounding to the new
+    one. Unparseable content is left as it is.
+    """
+    try:
+        old = _labels_from_txt(existing)
+        new = _labels_from_txt(content)
+    except (ValueError, IndexError):
+        return content
+    shown = _as_getinfo_shows
+    if len(old) != len(new) or any(
+        shown(o_start) != shown(n_start) or shown(o_end) != shown(n_end)
+        for (o_start, o_end, _), (n_start, n_end, _) in zip(old, new)
+    ):
+        return content
+    return _format_track_txt(
+        (o_start, o_end, n_text)
+        for (o_start, o_end, _), (_, _, n_text) in zip(old, new)
+    )
+
+
 def export_label_tracks_via_getinfo(
-    aup3_path=None, stem=None
+    aup3_path=None, stem=None, source=None
 ) -> List[Tuple[str, Path]]:
-    """Export every label track, one file per track. Returns (name, path) pairs."""
-    return _write_via_getinfo(get_label_track_indices(), aup3_path, stem)
+    """Export every label track, one file per track. Returns (name, path) pairs.
+    ``source`` is the ``.aup3`` to read exact times from (see :func:`_write_via_getinfo`)."""
+    return _write_via_getinfo(get_label_track_indices(), aup3_path, stem, source)
 
 
 def export_selected_label_tracks_via_getinfo(
-    aup3_path=None, stem=None
+    aup3_path=None, stem=None, source=None
 ) -> List[Tuple[str, Path]]:
-    """Export the selected label tracks, one file per track. Returns (name, path) pairs."""
-    return _write_via_getinfo(get_selected_label_track_indices(), aup3_path, stem)
-
-
-def export_selected_or_all_label_tracks_via_getinfo(
-    aup3_path=None, stem=None
-) -> List[Tuple[str, Path]]:
-    """Export the selected label tracks, or all when none is selected. Returns (name, path) pairs."""
-    indices = get_selected_label_track_indices() or get_label_track_indices()
-    return _write_via_getinfo(indices, aup3_path, stem)
+    """Export the selected label tracks, one file per track. Returns (name, path) pairs.
+    ``source`` is the ``.aup3`` to read exact times from (see :func:`_write_via_getinfo`)."""
+    return _write_via_getinfo(
+        get_selected_label_track_indices(), aup3_path, stem, source
+    )
 
 
 # --- transforming the selected label track in place (shared spine) ----------

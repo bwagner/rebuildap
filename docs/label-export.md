@@ -147,11 +147,17 @@ sample-accurate.
 For labels on a coarse grid (e.g. output of
 [`DBNDownBeatTracker`](https://github.com/CPJKU/madmom/blob/main/bin/DBNDownBeatTracker)
 rounded to 2 decimals) both paths yield identical files. A beat grid with sub-millisecond
-times does not survive `GetInfo`, which is why `quantize` reads the exact times from the
-`.aup3` instead (see [quantize: exact label times](in-place-commands.md#quantize-exact-label-times)).
-`export` and `check` still use `GetInfo`.
+times does not survive `GetInfo`.
 
-`rebuildap` uses the non-interactive `GetInfo` path exclusively. The interactive
+So every command now reads label **times** from the project's `.aup3` itself - the
+exact doubles Audacity stores, unsaved edits included - and uses `GetInfo` to check
+them against what Audacity reports. When the two disagree, or the file cannot be read,
+it falls back to `GetInfo`'s rounded times and says so on stderr; a `.txt` whose times
+round to those is then left as it is, and `check` counts it as matching. Details in
+[quantize: exact label times](in-place-commands.md#quantize-exact-label-times).
+
+The rest of this section is about the older choice between `GetInfo` and Audacity's
+own export dialog. `rebuildap` uses the non-interactive `GetInfo` path exclusively. The interactive
 dialog path was offered behind `-p` / `--precise` until 2026-07-18 and has been
 retired: `ExportLabels:` takes **no parameters** (see the
 [scripting reference](https://manual.audacityteam.org/man/scripting_reference.html#:~:text=Description-,ExportLabels%3A,-Export%20Labels)),

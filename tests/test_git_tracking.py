@@ -18,6 +18,7 @@ import subprocess
 
 import pytest
 
+from rebuildap import audacity_funcs as af
 from rebuildap import git_tracking as gt
 
 # Committing needs an identity, and the test must not depend on -- or touch --
@@ -30,6 +31,18 @@ _GIT_IDENTITY = (
     "-c",
     "commit.gpgsign=false",
 )
+
+
+def _fake_label_source(monkeypatch, contents):
+    """Fake the label read ``check`` makes, from ``.txt`` content per track name."""
+    monkeypatch.setattr(
+        af,
+        "read_label_tracks_precisely",
+        lambda source: (
+            {n: af._labels_from_txt(c) for n, c in contents.items()},
+            True,
+        ),
+    )
 
 
 def _git(repo, *args):
@@ -232,7 +245,6 @@ def test_each_file_carries_its_own_state_and_git_is_asked_once(
     monkeypatch, capsys, tmp_path
 ):
     import rebuildap
-    from rebuildap import audacity_funcs as af
 
     parts = tmp_path / "parts_song.txt"
     chords = tmp_path / "chords_song.txt"
@@ -247,10 +259,8 @@ def test_each_file_carries_its_own_state_and_git_is_asked_once(
         return {parts: gt.UNTRACKED}
 
     monkeypatch.setattr(rebuildap.git_tracking, "unversioned", fake_unversioned)
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        lambda: {"parts": "0.0\t0.0\tEm\n", "chords": "0.0\t0.0\tEm\n"},
+    _fake_label_source(
+        monkeypatch, {"parts": "0.0\t0.0\tEm\n", "chords": "0.0\t0.0\tEm\n"}
     )
 
     rebuildap._check_label_age_via_getinfo(tmp_path / "song.aup3", [chords, parts])
@@ -266,15 +276,12 @@ def test_each_file_carries_its_own_state_and_git_is_asked_once(
 
 def test_outside_a_repository_no_line_is_marked(monkeypatch, capsys, tmp_path):
     import rebuildap
-    from rebuildap import audacity_funcs as af
 
     chords = tmp_path / "chords_song.txt"
     chords.write_text("0.0\t0.0\tEm\n")
     (tmp_path / "song.aup3").write_text("x")
     monkeypatch.setattr(rebuildap.git_tracking, "unversioned", lambda _f: None)
-    monkeypatch.setattr(
-        af, "get_label_tracks_content_via_getinfo", lambda: {"chords": "0.0\t0.0\tEm\n"}
-    )
+    _fake_label_source(monkeypatch, {"chords": "0.0\t0.0\tEm\n"})
 
     rebuildap._check_label_age_via_getinfo(tmp_path / "song.aup3", [chords])
     assert "[git:" not in capsys.readouterr().out
