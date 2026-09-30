@@ -223,7 +223,9 @@ window.
 
 ## Matching the project is not the same as being safe
 
-`check` compares each label file against its label track and reports a diff. That
+`check` compares each label file against its label track and reports a diff: how
+many labels differ, then the first 10 lines of the diff (`-d` prints it in full; the
+project's version is also written beside the project as `<track>.txt`). That
 answers one question. The other one it used to leave unasked is whether the file
 it just validated is actually in git.
 

@@ -31,7 +31,7 @@ def process_lines(lines):
     return [normalize_label_line(line) or line for line in lines]
 
 
-def check_label_age(filename: str, verbose, deep=False):
+def check_label_age(filename: str, verbose, deep=False, full_diff=False):
     """
     Check whether the Audacity file is newer than the label files.
     Export those label tracks whose corresponding label files are older than the Audacity file
@@ -111,7 +111,7 @@ def check_label_age(filename: str, verbose, deep=False):
         print(f"Skipping {filename.name}: {e}", file=sys.stderr)
         return
 
-    _check_label_age_via_getinfo(filename, label_files)
+    _check_label_age_via_getinfo(filename, label_files, full_diff)
 
     # Close via AppleScript Cmd-W rather than pa.do("Close:") — avoids the
     # mod-script-pipe → lib-menus.dylib crash path that bites after a few
@@ -145,7 +145,7 @@ def _any_label_file_older(label_files, filename):
     return any(f.stat().st_mtime < aup3_mtime for f in label_files)
 
 
-def _check_label_age_via_getinfo(filename, label_files):
+def _check_label_age_via_getinfo(filename, label_files, full_diff=False):
     """Non-interactive path: compare versioned files against GetInfo content in memory.
 
     Every label file for the project is compared -- see :func:`_any_label_file_older`
@@ -185,6 +185,8 @@ def _check_label_age_via_getinfo(filename, label_files):
             labels_from_file,
             labels_from_proj,
             git_reasons.get(label_file),
+            full_diff=full_diff,
+            inspection=out_dir / f"{short_name}.txt",
         )
         _maybe_write_divergent_export(
             expected_content=expected,
@@ -252,13 +254,35 @@ def _git_note(reason):
     return f" [git: {reason}]" if reason else ""
 
 
+# How many diff lines ``check`` prints per differing file unless asked for all
+# (``-d``). After a re-grid every label differs, and one project printed 8089
+# lines - all of it already on disk in the inspection copies.
+DIFF_PREVIEW_LINES = 10
+
+_DIFF_HEADERS = ("---", "+++")
+
+
+def _is_diff_body(line):
+    """A unified-diff line that shows a label: context, removed or added."""
+    return bool(line) and line[0] in "+- " and not line.startswith(_DIFF_HEADERS)
+
+
 def _report_diff(
     label_file,
     exported_label_name,
     labels_from_file,
     labels_from_proj,
     git_reason=None,
+    full_diff=False,
+    inspection=None,
 ):
+    """Say whether ``label_file`` matches the project's label track, and how.
+
+    A difference is summarized (how many labels differ) and its unified diff
+    shown up to :data:`DIFF_PREVIEW_LINES` lines, then a pointer to ``-d`` and
+    to ``inspection``, the copy of the project's version ``check`` writes
+    beside it. ``full_diff`` prints the whole diff.
+    """
     sm = list(
         difflib.unified_diff(
             labels_from_file,
@@ -270,17 +294,38 @@ def _report_diff(
     note = _git_note(git_reason)
     # The note goes before the punctuation in both forms, so the diff that
     # follows the ":" still starts on its own line.
-    if sm:
-        print(
-            f"Label file {label_file.name} differs from exported label track "
-            f"{exported_label_name}{note}:"
-        )
-        print("".join(sm))
-    else:
+    if not sm:
         print(
             f"Label file {label_file.name} and exported label track "
             f"{exported_label_name} are identical{note}."
         )
+        return
+    body = [line for line in sm if _is_diff_body(line)]
+    removed = sum(1 for line in body if line.startswith("-"))
+    added = sum(1 for line in body if line.startswith("+"))
+    differing = max(removed, added)
+    total = max(len(labels_from_file), len(labels_from_proj))
+    print(
+        f"Label file {label_file.name} differs from exported label track "
+        f"{exported_label_name}{note}:"
+    )
+    print(f"{differing} of {total} labels differ.")
+    if full_diff or len(body) <= DIFF_PREVIEW_LINES:
+        print("".join(sm))
+        return
+    shown, body_seen = [], 0
+    for line in sm:
+        if _is_diff_body(line):
+            if body_seen == DIFF_PREVIEW_LINES:
+                break
+            body_seen += 1
+        shown.append(line)
+    print("".join(shown), end="")
+    where = f", the project's version in {inspection}" if inspection else ""
+    print(
+        f"... {len(body) - DIFF_PREVIEW_LINES} more diff lines; the full diff "
+        f"with -d{where}"
+    )
 
 
 def _report_other_open_projects():
@@ -942,12 +987,19 @@ def _build_parser():
         "export",
         parents=[common],
         help="Export label tracks to versioned .txt files.",
+        # Raw, so the paragraph breaks survive: which tracks get exported depends
+        # on the selection, and that must not hide mid-paragraph.
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Write label tracks out as the versioned *_<stem>.txt files, named "
-            "after the project's .aup3 stem. With AUP3 they land beside that "
-            "file; with no argument the open project is used and they land in "
-            "the current directory, which is where these source-of-truth files "
-            "belong."
+            "Write label tracks out as the versioned *_<stem>.txt files, named after the\n"
+            "project's .aup3 stem.\n"
+            "\n"
+            "With no argument the open project is used, and only its SELECTED label tracks\n"
+            "are exported - all of them when none is selected. They land in the current\n"
+            "directory.\n"
+            "\n"
+            "With AUP3 that project is opened and every label track is exported beside it,\n"
+            "whatever is selected."
         ),
     )
     export.add_argument(
@@ -955,9 +1007,8 @@ def _build_parser():
         nargs="?",
         metavar="AUP3",
         help=(
-            "Project whose label tracks to export. Omit to export the open "
-            "Audacity project's - the selected tracks, or all of them if none "
-            "are selected."
+            "Project whose label tracks to export, all of them. Omit to export "
+            "the open project's selected tracks (see above)."
         ),
     )
     export.add_argument(
@@ -1003,6 +1054,16 @@ def _build_parser():
             "changing the project."
         ),
     )
+    check.add_argument(
+        "-d",
+        "--diff",
+        dest="full_diff",
+        action="store_true",
+        help=(
+            f"Print every difference in full. Without it each differing file "
+            f"shows its first {DIFF_PREVIEW_LINES} diff lines."
+        ),
+    )
     check.set_defaults(
         func=lambda args: check_label_age(
             filename=args.aup3,
@@ -1011,6 +1072,7 @@ def _build_parser():
             # because that is what it does - skip the mtime gate and compare
             # everything.
             deep=args.force,
+            full_diff=args.full_diff,
         )
     )
 

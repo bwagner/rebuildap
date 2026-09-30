@@ -76,7 +76,7 @@ There are six commands:
 | Command | What happens |
 |---|---|
 | `build AUDIO` | the audio (`.mp3`, `.wav`, anything Audacity imports) is imported, and the matching `*_stem.txt` files become label tracks |
-| `export [AUP3]` | the project's label tracks are exported to individual `.txt` files; with no argument, the running Audacity project's are |
+| `export [AUP3]` | every label track of the project is exported to its own `.txt` file; with no argument, the running Audacity project's **selected** label tracks are - all of them when none is selected |
 | `check [AUP3]` | the project's label tracks are compared against the versioned `.txt` files, and any label file not committed to git is named |
 | `import LABELFILE` | one label file is added to the open project as a label track |
 | `quantize [BEATS_TRACK]` | the open project's selected label track is snapped to a beats track, in place ([details](docs/in-place-commands.md)) |
@@ -177,14 +177,18 @@ options:
 usage: rebuildap export [-h] [-v] [-f] [AUP3]
 
 Write label tracks out as the versioned *_<stem>.txt files, named after the
-project's .aup3 stem. With AUP3 they land beside that file; with no argument
-the open project is used and they land in the current directory, which is
-where these source-of-truth files belong.
+project's .aup3 stem.
+
+With no argument the open project is used, and only its SELECTED label tracks
+are exported - all of them when none is selected. They land in the current
+directory.
+
+With AUP3 that project is opened and every label track is exported beside it,
+whatever is selected.
 
 positional arguments:
-  AUP3           Project whose label tracks to export. Omit to export the open
-                 Audacity project's - the selected tracks, or all of them if
-                 none are selected.
+  AUP3           Project whose label tracks to export, all of them. Omit to
+                 export the open project's selected tracks (see above).
 
 options:
   -h, --help     show this help message and exit
@@ -195,7 +199,7 @@ options:
 ```
 
 ```console
-usage: rebuildap check [-h] [-v] [-f] [AUP3]
+usage: rebuildap check [-h] [-v] [-f] [-d] [AUP3]
 
 Report where the project and its versioned label files have diverged, and
 update any .txt whose content changed. Label tracks that exist only in
@@ -212,6 +216,8 @@ options:
                  them are newer than the .aup3. Opens Audacity every run, and
                  catches label files rewritten (by e.g. git checkout, touch)
                  without changing the project.
+  -d, --diff     Print every difference in full. Without it each differing
+                 file shows its first 10 diff lines.
 ```
 
 ```console
