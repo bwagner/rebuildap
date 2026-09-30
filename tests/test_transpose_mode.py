@@ -9,10 +9,13 @@ here: which labels are in scope, what happens to text that is not a chord, the
 accidental spelling, and the CLI guards.
 """
 
+from pathlib import Path
+
 import pytest
 
 import rebuildap
 from rebuildap import audacity_funcs as af
+from rebuildap import audacity_present as ap
 
 
 def _track(name, kind="label", selected=False):
@@ -195,7 +198,9 @@ def _orchestrator(monkeypatch, current, selection=(0.0, 0.0)):
     ]
     monkeypatch.setattr(af, "get_tracks", lambda: tracks)
     monkeypatch.setattr(
-        af, "get_label_tracks_content_via_getinfo", lambda: {"chords": current}
+        af,
+        "read_label_tracks_precisely",
+        lambda aup3_path: ({"chords": af._labels_from_txt(current)}, True),
     )
     monkeypatch.setattr(af, "read_time_selection", lambda: selection)
     monkeypatch.setattr(af, "remove_selected_tracks", lambda: events.append("remove"))
@@ -216,7 +221,7 @@ def test_transpose_swaps_the_track_via_the_shared_spine(monkeypatch):
     current = af._format_track_txt([(0.0, 1.0, "Am")])
     events = _orchestrator(monkeypatch, current)
 
-    name, index, content, changed, skipped = af.transpose_selected_label_track(2)
+    name, index, content, changed, skipped, _ = af.transpose_selected_label_track(2)
 
     assert (name, index, changed) == ("chords", 1, True)
     assert content == af._format_track_txt([(0.0, 1.0, "Bm")])
@@ -227,13 +232,13 @@ def test_transpose_swaps_the_track_via_the_shared_spine(monkeypatch):
 def test_the_orchestrator_defaults_to_flats(monkeypatch):
     """A -> Bb, not A#. Uses a chord whose two spellings differ, unlike Am -> Bm."""
     _orchestrator(monkeypatch, af._format_track_txt([(0.0, 1.0, "A")]))
-    _, _, content, _, _ = af.transpose_selected_label_track(1)
+    _, _, content, _, _, _ = af.transpose_selected_label_track(1)
     assert content == af._format_track_txt([(0.0, 1.0, "Bb")])
 
 
 def test_the_orchestrator_honours_sharps(monkeypatch):
     _orchestrator(monkeypatch, af._format_track_txt([(0.0, 1.0, "A")]))
-    _, _, content, _, _ = af.transpose_selected_label_track(1, prefer_flats=False)
+    _, _, content, _, _, _ = af.transpose_selected_label_track(1, prefer_flats=False)
     assert content == af._format_track_txt([(0.0, 1.0, "A#")])
 
 
@@ -241,7 +246,7 @@ def test_no_chords_leaves_the_project_untouched(monkeypatch):
     current = af._format_track_txt([(0.0, 1.0, "Guitar Solo")])
     events = _orchestrator(monkeypatch, current)
 
-    _, _, content, changed, skipped = af.transpose_selected_label_track(2)
+    _, _, content, changed, skipped, _ = af.transpose_selected_label_track(2)
 
     assert changed is False
     assert events == [], "a track with no chords must not touch the project"
@@ -254,7 +259,7 @@ def test_transposing_to_the_same_spelling_skips_the_swap(monkeypatch):
     current = af._format_track_txt([(0.0, 1.0, "Bb")])
     events = _orchestrator(monkeypatch, current)
 
-    _, _, _, changed, _ = af.transpose_selected_label_track(0)
+    _, _, _, changed, _, _ = af.transpose_selected_label_track(0)
 
     assert changed is False
     assert events == []
@@ -268,7 +273,7 @@ def test_force_whole_track_skips_the_selection_read(monkeypatch):
         raise AssertionError("read_time_selection must not be called with -f")
 
     monkeypatch.setattr(af, "read_time_selection", fail)
-    _, _, content, _, _ = af.transpose_selected_label_track(2, whole_track=True)
+    _, _, content, _, _, _ = af.transpose_selected_label_track(2, whole_track=True)
     assert content == af._format_track_txt([(0.0, 1.0, "Bm")])
 
 
@@ -357,15 +362,30 @@ def test_sharps_belongs_to_transpose_alone(monkeypatch):
 
 
 def _stub_transpose(
-    monkeypatch, stem="song", name="chords", content="Bb\n", changed=True, skipped=()
+    monkeypatch,
+    stem="song",
+    name="chords",
+    content="Bb\n",
+    changed=True,
+    skipped=(),
+    open_paths=(),
+    seen=None,
+    precise=True,
 ):
     """Fake the live layer for _transpose_open_project, recording the arguments it
-    was called with so the CLI-to-orchestrator wiring can be asserted."""
+    was called with so the CLI-to-orchestrator wiring can be asserted.
+    ``open_paths`` is what Audacity holds open; ``seen`` (a dict) receives the
+    ``aup3_path`` transpose was handed."""
     calls = []
     monkeypatch.setattr(rebuildap, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: stem)
+    monkeypatch.setattr(ap, "open_project_paths", lambda: list(open_paths))
 
-    def fake(semitones, prefer_flats=True, verbose=False, whole_track=False):
+    def fake(
+        semitones, prefer_flats=True, verbose=False, whole_track=False, aup3_path=None
+    ):
+        if seen is not None:
+            seen["aup3_path"] = aup3_path
         calls.append(
             {
                 "semitones": semitones,
@@ -373,7 +393,7 @@ def _stub_transpose(
                 "whole_track": whole_track,
             }
         )
-        return (name, 1, content, changed, list(skipped))
+        return (name, 1, content, changed, list(skipped), precise)
 
     monkeypatch.setattr(af, "transpose_selected_label_track", fake)
     return calls
@@ -472,6 +492,7 @@ def test_selection_read_failure_exits_pointing_at_force(monkeypatch, tmp_path):
     (tmp_path / "song.aup3").write_text("")
     monkeypatch.setattr(rebuildap, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: "song")
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [])
 
     def boom(*a, **k):
         raise af.SelectionReadError("no accessor")
@@ -527,3 +548,128 @@ def test_outcome_caps_a_long_skipped_list(capsys):
 def test_outcome_when_nothing_was_a_chord(capsys):
     out = _outcome(capsys, changed=False, wrote=False, skipped=["Verse1"])
     assert "no chords" in out.lower() or "nothing to do" in out.lower()
+
+
+# --- exact label times ----------------------------------------------------------
+#
+# transpose never moves a label, but it re-imports the track, and through GetInfo
+# every time came back rounded to six significant digits - moving each chord in
+# scope by up to half a millisecond off its beat.
+
+BEAT = 100.68907563025209
+
+
+def _exact_orchestrator(monkeypatch, precise=True, seen=None):
+    """transpose_selected_label_track over a chord sitting exactly on BEAT; the
+    import records the file it was handed in ``seen["imported"]``."""
+    seen = {} if seen is None else seen
+    tracks = [_track("song", kind="wave"), _track("chords", selected=True)]
+    monkeypatch.setattr(af, "get_tracks", lambda: tracks)
+
+    def read(aup3_path):
+        seen["aup3_path"] = aup3_path
+        return {"chords": [(BEAT, BEAT, "C")]}, precise
+
+    monkeypatch.setattr(af, "read_label_tracks_precisely", read)
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))
+    monkeypatch.setattr(af, "remove_selected_tracks", lambda: None)
+
+    def fake_import(path, name=None):
+        seen["imported"] = Path(path).read_text()
+
+    monkeypatch.setattr(af, "make_label_track_from_file", fake_import)
+    monkeypatch.setattr(af, "get_track_count", lambda: 2)
+    monkeypatch.setattr(af, "move_track_to", lambda *a: None)
+    monkeypatch.setattr(af, "_flush_to_project_file", lambda idx: None)
+    monkeypatch.setattr(af, "select_tracks", lambda *a: None)
+    return seen
+
+
+def test_transpose_reimports_every_time_bit_exact(monkeypatch):
+    seen = _exact_orchestrator(monkeypatch)
+
+    _, _, content, changed, _, _ = af.transpose_selected_label_track(2)
+
+    assert changed is True
+    assert af._labels_from_txt(seen["imported"]) == [(BEAT, BEAT, "D")]
+    # The versioned file keeps Audacity's own 6-decimal export format.
+    assert content == "100.689076\t100.689076\tD\n"
+
+
+def test_transpose_passes_the_project_file_to_the_label_read(monkeypatch):
+    seen = _exact_orchestrator(monkeypatch)
+    project = Path("/x/song.aup3")
+
+    af.transpose_selected_label_track(2, aup3_path=project)
+
+    assert seen["aup3_path"] == project
+
+
+@pytest.mark.parametrize("precise", [True, False])
+def test_transpose_says_whether_its_label_read_was_exact(monkeypatch, precise):
+    _exact_orchestrator(monkeypatch, precise=precise)
+    assert af.transpose_selected_label_track(2)[-1] is precise
+
+
+def _transpose_in_cwd(monkeypatch, tmp_path, existing=None, **stub):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    out = tmp_path / "chords_song.txt"
+    if existing is not None:
+        out.write_text(existing)
+    seen = {}
+    _stub_transpose(monkeypatch, stem="song", seen=seen, **stub)
+    rebuildap._transpose_open_project(2, verbose=False)
+    return seen, out
+
+
+def test_transpose_is_handed_the_open_file_of_the_project(monkeypatch, tmp_path):
+    open_file = Path("/Volumes/SSD/song/song.aup3")
+    seen, _ = _transpose_in_cwd(
+        monkeypatch, tmp_path, open_paths=[open_file, open_file]
+    )
+    assert seen["aup3_path"] == open_file
+
+
+def test_a_fallback_transpose_keeps_the_files_exact_times(monkeypatch, tmp_path):
+    """GetInfo showed 100.689; the file knows 100.689076. Only the text is news."""
+    _, out = _transpose_in_cwd(
+        monkeypatch,
+        tmp_path,
+        existing="100.689076\t100.689076\tC\n",
+        content="100.689000\t100.689000\tD\n",
+        precise=False,
+    )
+    assert out.read_text() == "100.689076\t100.689076\tD\n"
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        "100.5\t100.5\tC\n",  # a time that does not round to what GetInfo showed
+        "100.689076\t100.689076\tC\n5.0\t5.0\tE\n",  # another label
+    ],
+)
+def test_a_fallback_transpose_takes_getinfos_times_when_the_file_does_not_match(
+    monkeypatch, tmp_path, existing
+):
+    _, out = _transpose_in_cwd(
+        monkeypatch,
+        tmp_path,
+        existing=existing,
+        content="100.689000\t100.689000\tD\n",
+        precise=False,
+    )
+    assert out.read_text() == "100.689000\t100.689000\tD\n"
+
+
+def test_an_exact_transpose_writes_its_own_times(monkeypatch, tmp_path):
+    """With an exact read the orchestrator's times are the truth, file or not."""
+    _, out = _transpose_in_cwd(
+        monkeypatch,
+        tmp_path,
+        existing="100.689076\t100.689076\tC\n",
+        content="100.689000\t100.689000\tD\n",
+        precise=True,
+    )
+    assert out.read_text() == "100.689000\t100.689000\tD\n"

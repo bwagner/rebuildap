@@ -1924,14 +1924,20 @@ def transpose_selected_label_track(
     prefer_flats: bool = True,
     verbose: bool = False,
     whole_track: bool = False,
-) -> Tuple[str, int, str, bool, List[str]]:
+    aup3_path: Optional[Path] = None,
+) -> Tuple[str, int, str, bool, List[str], bool]:
     """Transpose the selected label track's chords, in place.
 
-    Returns ``(target_name, target_index, content, changed, skipped)`` --
-    the same shape ``quantize`` returns plus the list of in-scope labels that held no
-    chord. ``content`` is the canonical ``.txt`` form for the caller to write as
-    the versioned source of truth; it is also exactly what was imported, so file
-    and track cannot diverge.
+    Returns ``(target_name, target_index, content, changed, skipped, precise)``
+    -- the list of in-scope labels that held no chord, and whether the label
+    times were read exactly. ``content`` is the canonical 6-decimal ``.txt`` form
+    for the caller to write as the versioned source of truth; the project gets
+    the same labels at full digits.
+
+    Times are never changed, but the track is re-imported, so they are read from
+    ``aup3_path`` via :func:`read_label_tracks_precisely` and imported at full
+    digits: through GetInfo alone every chord came back rounded to six
+    significant digits, up to half a millisecond off its beat.
 
     Flats by default: the corpus this serves is flat-heavy, unlike the sister
     library's own sharps default. See :func:`_transposed_labels`.
@@ -1942,10 +1948,10 @@ def transpose_selected_label_track(
     """
     tracks = get_tracks()
     target_index, target_name = resolve_selected_label_track(tracks)
-    contents = get_label_tracks_content_via_getinfo()
+    labels, precise = read_label_tracks_precisely(aup3_path)
     selection = resolve_selection_scope(whole_track)
 
-    orig_labels = _labels_from_txt(contents[target_name])
+    orig_labels = labels[target_name]
     final_labels, skipped = _transposed_labels(
         orig_labels, semitones, prefer_flats, selection
     )
@@ -1953,9 +1959,12 @@ def transpose_selected_label_track(
     if verbose:
         _report_transposed_count(orig_labels, final_labels, skipped, selection)
     changed = replace_label_track(
-        target_index, target_name, content, contents[target_name]
+        target_index,
+        target_name,
+        _format_exact_track_txt(final_labels),
+        _format_exact_track_txt(orig_labels),
     )
-    return target_name, target_index, content, changed, skipped
+    return target_name, target_index, content, changed, skipped, precise
 
 
 def _report_transposed_count(orig_labels, final_labels, skipped, selection) -> None:

@@ -17,8 +17,8 @@ refuse. Back to the [README](../README.md).
   one removed, and the new one moved back to the row the old one held and reselected.
 - **File and track come from the same content.** The result is written to
   `<track>_<stem>.txt` and imported from those same labels, so the two agree by
-  construction; nothing is read back from Audacity. (`quantize` imports them at full
-  precision and writes the file with Audacity's usual 6 decimals - see
+  construction; nothing is read back from Audacity. (Both import them at full
+  precision and write the file with Audacity's usual 6 decimals - see
   [quantize: exact label times](#quantize-exact-label-times).)
 - **Nothing changes, nothing is touched.** If the result equals the track's current
   content, the project is left byte-identical (no mtime bump, no undo entry), and the
@@ -128,6 +128,10 @@ the file Audacity has open, unsaved edits included - and snaps to them exactly.
 `rebuildap transpose SEMITONES` transposes the chords in the selected track by
 `SEMITONES` half steps; a negative number goes down. Label times are never touched.
 
+- **Times survive exactly.** The track is re-imported, so its times are read from the
+  `.aup3` the same way `quantize` reads them. When that read falls back to Audacity's
+  rounded times, the `.txt` keeps its own exact times wherever they round to the ones
+  read, and only the texts change; the project itself then gets the rounded times.
 - **Flats by default**, `-s` / `--sharps` for sharps. Every outcome names the spelling
   it used. So `transpose 0` is not a no-op on a sharp-spelled track: it respells it
   with flats.

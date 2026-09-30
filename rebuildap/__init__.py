@@ -657,6 +657,32 @@ def _write_if_divergent(out_path, content, rounded=False):
     return True
 
 
+def _with_times_from(existing, content):
+    """``content`` with the times of ``existing`` put back, when ``content``'s
+    times are GetInfo's rounding of them; else ``content`` unchanged.
+
+    For a ``transpose`` whose label read fell back to GetInfo: its times are
+    rounded, but it only changed texts, so the versioned file's exact times still
+    hold. Needs the same number of labels, each existing time rounding to the new
+    one. Unparseable content is left as it is.
+    """
+    try:
+        old = af._labels_from_txt(existing)
+        new = af._labels_from_txt(content)
+    except (ValueError, IndexError):
+        return content
+    shown = af._as_getinfo_shows
+    if len(old) != len(new) or any(
+        shown(o_start) != shown(n_start) or shown(o_end) != shown(n_end)
+        for (o_start, o_end, _), (n_start, n_end, _) in zip(old, new)
+    ):
+        return content
+    return af._format_track_txt(
+        (o_start, o_end, n_text)
+        for (o_start, o_end, _), (_, _, n_text) in zip(old, new)
+    )
+
+
 def _same_labels_as_getinfo_shows(a, b):
     """Whether two label ``.txt`` contents hold the same labels once their times
     are rounded the way GetInfo rounds them. Unparseable content is never equal."""
@@ -717,10 +743,15 @@ def _transpose_open_project(semitones, sharps=False, verbose=False, force=False)
         raise SystemExit(1)  # explained on stderr; see _quantize_open_project
     stem = _open_project_stem_or_exit()
     out_dir = _resolve_project_dir(stem, f"transpose {semitones}")
+    aup3_path = _open_project_file(stem, ap.open_project_paths())
     try:
-        target_name, _idx, content, changed, skipped = (
+        target_name, _idx, content, changed, skipped, precise = (
             af.transpose_selected_label_track(
-                semitones, prefer_flats=not sharps, verbose=verbose, whole_track=force
+                semitones,
+                prefer_flats=not sharps,
+                verbose=verbose,
+                whole_track=force,
+                aup3_path=aup3_path,
             )
         )
     except af.SelectionReadError as e:
@@ -731,7 +762,9 @@ def _transpose_open_project(semitones, sharps=False, verbose=False, force=False)
     except af.LabelTrackError as e:
         raise SystemExit(f"{e}") from e
     out_path = out_dir / af._derive_label_filename(target_name, stem)
-    wrote = _write_if_divergent(out_path, content)
+    if not precise and out_path.exists():
+        content = _with_times_from(out_path.read_text(), content)
+    wrote = _write_if_divergent(out_path, content, rounded=not precise)
     _report_transpose_outcome(
         target_name, out_path, semitones, not sharps, changed, wrote, skipped
     )
