@@ -576,6 +576,20 @@ def _resolve_project_dir(stem, flag):
     )
 
 
+def _open_project_file(stem, open_paths):
+    """The one ``.aup3`` among ``open_paths`` (what Audacity holds open) named
+    ``stem``, else None.
+
+    Where ``quantize`` reads exact label times. Not derived from cwd or Open Recent:
+    a same-stem copy elsewhere may be the one in the window. Two open copies of the
+    stem give None rather than a guess -- which one the pipe is addressing is not
+    knowable -- and the label read then falls back to GetInfo, saying so.
+    """
+    # A set: Audacity holds each open .aup3 more than once (measured 2026-09-30).
+    matches = {p for p in open_paths if p.stem == stem}
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
 def _quantize_open_project(beats_track=None, verbose=False, force=False):
     """Quantize the selected label track to a beats track, in place, then persist.
 
@@ -596,9 +610,12 @@ def _quantize_open_project(beats_track=None, verbose=False, force=False):
         raise SystemExit(1)
     stem = _open_project_stem_or_exit()
     out_dir = _resolve_project_dir(stem, "quantize")
+    aup3_path = _open_project_file(stem, ap.open_project_paths())
     try:
-        target_name, _idx, reference_name, content, changed = (
-            af.quantize_selected_label_track(beats_track, verbose, whole_track=force)
+        target_name, _idx, reference_name, content, changed, precise = (
+            af.quantize_selected_label_track(
+                beats_track, verbose, whole_track=force, aup3_path=aup3_path
+            )
         )
     except af.SelectionReadError as e:
         raise SystemExit(
@@ -610,11 +627,11 @@ def _quantize_open_project(beats_track=None, verbose=False, force=False):
         # track selected) and the quantize-specific QuantizeError.
         raise SystemExit(f"{e}") from e
     out_path = out_dir / af._derive_label_filename(target_name, stem)
-    wrote = _write_if_divergent(out_path, content)
+    wrote = _write_if_divergent(out_path, content, rounded=not precise)
     _report_quantize_outcome(target_name, reference_name, out_path, changed, wrote)
 
 
-def _write_if_divergent(out_path, content):
+def _write_if_divergent(out_path, content, rounded=False):
     """Write ``content`` to ``out_path`` unless the file already holds equivalent
     labels. Returns True iff it wrote.
 
@@ -622,14 +639,41 @@ def _write_if_divergent(out_path, content):
     (:func:`process_lines` -> ``cut_trailing_zeros``), so a file that differs only
     in float formatting is left untouched -- source-of-truth files are never
     rewritten with identical content.
+
+    ``rounded``: ``content`` came from GetInfo's rounded label times, which cannot
+    tell an exact time from its rounding. Then a file whose times round to
+    ``content``'s is equivalent too, so it keeps its exact times rather than
+    being "corrected" to rounded ones.
     """
     if out_path.exists():
-        existing = process_lines(out_path.read_text().splitlines(keepends=True))
+        existing_text = out_path.read_text()
+        existing = process_lines(existing_text.splitlines(keepends=True))
         incoming = process_lines(content.splitlines(keepends=True))
         if existing == incoming:
             return False
+        if rounded and _same_labels_as_getinfo_shows(existing_text, content):
+            return False
     out_path.write_text(content)
     return True
+
+
+def _same_labels_as_getinfo_shows(a, b):
+    """Whether two label ``.txt`` contents hold the same labels once their times
+    are rounded the way GetInfo rounds them. Unparseable content is never equal."""
+    try:
+        a_labels = af._labels_from_txt(a)
+        b_labels = af._labels_from_txt(b)
+    except (ValueError, IndexError):
+        return False
+    shown = af._as_getinfo_shows
+    return len(a_labels) == len(b_labels) and all(
+        a_text == b_text
+        and shown(a_start) == shown(b_start)
+        and shown(a_end) == shown(b_end)
+        for (a_start, a_end, a_text), (b_start, b_end, b_text) in zip(
+            a_labels, b_labels
+        )
+    )
 
 
 def _report_quantize_outcome(target_name, reference_name, out_path, changed, wrote):

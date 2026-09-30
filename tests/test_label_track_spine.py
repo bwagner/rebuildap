@@ -7,6 +7,7 @@ content in. Those three are tested here directly, rather than only through the
 mode that happens to use them, so the next mode inherits the coverage.
 """
 
+import json
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -147,6 +148,8 @@ def test_the_temp_file_is_removed_after_the_swap(monkeypatch):
     )
     monkeypatch.setattr(af, "get_track_count", lambda: 1)
     monkeypatch.setattr(af, "move_track_to", lambda frm, to: None)
+    # A sole track needs no move, so the swap flushes; not this test's subject.
+    monkeypatch.setattr(af, "_flush_to_project_file", lambda idx: None)
     monkeypatch.setattr(af, "select_tracks", lambda idx: None)
 
     af.replace_label_track(0, "chords", "new\n", "old\n")
@@ -276,3 +279,76 @@ def test_watcher_idle_and_read_failed_still_refuses(monkeypatch):
     monkeypatch.setattr(af, "_no_region_dialog_present", lambda: False)
     with pytest.raises(af.SelectionReadError):
         af.resolve_selection_scope()
+
+
+# --- making the .aup3 catch up after the re-import ------------------------------
+#
+# Measured 2026-09-30: a scripted ImportLabels (and the SetTrack rename) writes
+# nothing to the .aup3 and records no undo step; every step that records one does,
+# carrying the import along. A move back up is such a step. A track that was
+# already the bottom row needs none, so a no-op SetLabel -- re-setting the new
+# track's last label to its own text -- stands in, or the next precise read would
+# find the file stale and fall back. SetLabel's Label= counts labels across ALL
+# label tracks in track order, whatever is selected (measured the same day).
+
+
+def _record_pipe(monkeypatch, events, labels_response):
+    """Record pa.do commands into ``events``; answer GetInfo: Type=Labels."""
+
+    def do(cmd):
+        if cmd == "GetInfo: Type=Labels":
+            return json.dumps(labels_response) + "\nBatchCommand finished: OK\n"
+        events.append(f"pa:{cmd}")
+        return "BatchCommand finished: OK\n"
+
+    monkeypatch.setattr(af.pa, "do", do)
+
+
+# After the swap: 'parts' (track 1) holds 2 labels, the re-imported 'chords'
+# (track 2, the bottom row) holds 2, its last one 'C' - global label index 3.
+AFTER_SWAP = [[1, [[0, 0, "a"], [1, 1, "b"]]], [2, [[0, 0, "x"], [5, 5, "C"]]]]
+
+
+def test_a_track_that_needs_no_move_is_flushed_to_the_project_file(monkeypatch):
+    events = _record_swap(monkeypatch, track_count=3)
+    _record_pipe(monkeypatch, events, AFTER_SWAP)
+
+    af.replace_label_track(2, "chords", "new\n", "old\n")
+
+    assert events == [
+        "remove",
+        "import:chords:new\n",
+        "move:2->2",
+        'pa:SetLabel: Label=3 Text="C"',
+        "select:[2]",
+    ]
+
+
+def test_a_track_moved_back_up_is_not_flushed(monkeypatch):
+    """The move already recorded an undo step; a flush would only add another."""
+    events = _record_swap(monkeypatch, track_count=3)
+    _record_pipe(monkeypatch, events, AFTER_SWAP)
+
+    af.replace_label_track(1, "chords", "new\n", "old\n")
+
+    assert not [e for e in events if e.startswith("pa:SetLabel")]
+
+
+def test_a_track_with_no_labels_is_not_flushed(monkeypatch):
+    events = _record_swap(monkeypatch, track_count=3)
+    _record_pipe(monkeypatch, events, [[1, [[0, 0, "a"]]], [2, []]])
+
+    af.replace_label_track(2, "chords", "", "old\n")
+
+    assert not [e for e in events if e.startswith("pa:SetLabel")]
+
+
+def test_a_label_text_holding_a_double_quote_is_not_flushed(monkeypatch):
+    """No escaping for a quote inside Text="..." is known, and a wrong guess would
+    rewrite the label; the precise read's fallback covers the stale file instead."""
+    events = _record_swap(monkeypatch, track_count=3)
+    _record_pipe(monkeypatch, events, [[2, [[0, 0, 'say "hi"']]]])
+
+    af.replace_label_track(2, "chords", "new\n", "old\n")
+
+    assert not [e for e in events if e.startswith("pa:SetLabel")]

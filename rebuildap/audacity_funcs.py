@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
+from decimal import Decimal
 from pathlib import Path
 from typing import Dict, Generator, Iterable, List, Optional, Tuple
 
@@ -18,6 +19,7 @@ import pyaudacity as pa
 import pyperclip
 from transpose import transpose_label_text
 
+from . import aup3_labels
 from .utils import LabelFormatError, normalize_label_line
 
 
@@ -1161,6 +1163,106 @@ def get_label_tracks_content_via_getinfo() -> Dict[str, str]:
     }
 
 
+def get_label_tracks_via_getinfo() -> List[Tuple[str, List[tuple]]]:
+    """Every label track as ``(name, [(start, end, text), ...])``, in track order.
+
+    Unlike :func:`get_label_tracks_content_via_getinfo` this keeps repeated names,
+    which :func:`cross_check_label_tracks` must see to refuse them. Times carry
+    GetInfo's rounding (see :data:`GETINFO_SIGNIFICANT_DIGITS`).
+    """
+    labels_by_idx = _parse_labels_response(
+        _pa_do_timed("GetInfo: Type=Labels", timeout=5.0)
+    )
+    names_by_idx = _label_track_names_by_idx(
+        _parse_tracks_response(_pa_do_timed("GetInfo: Type=Tracks", timeout=3.0))
+    )
+    return [
+        (names_by_idx[idx], labels_by_idx.get(idx, [])) for idx in sorted(names_by_idx)
+    ]
+
+
+# GetInfo prints label times like C's %g: six significant digits, 1 ms at 100 s.
+# Measured 2026-09-30: all 4066 labels of a live project, read exactly from its
+# .aup3 and rounded this way, equalled GetInfo's values.
+GETINFO_SIGNIFICANT_DIGITS = 6
+
+PRECISION_FALLBACK_NOTE = (
+    "Label times read via GetInfo, exact only to 6 significant digits, 1 ms at "
+    "100 s ({reason}); 'already quantized' means only to that precision."
+)
+
+
+def _as_getinfo_shows(t: float) -> float:
+    return float(f"{t:.{GETINFO_SIGNIFICANT_DIGITS}g}")
+
+
+def cross_check_label_tracks(
+    file_tracks: List[Tuple[str, List[tuple]]],
+    getinfo_tracks: List[Tuple[str, List[tuple]]],
+) -> Optional[str]:
+    """``None`` when the exact label tracks read from the ``.aup3`` are the ones
+    Audacity reports live, else why not.
+
+    Agreement means the same track names in the same order, no name twice (the
+    caller looks tracks up by name), and per label the same text and times that
+    round to GetInfo's. A stale file, the wrong file and a misparse all show up as
+    disagreement.
+    """
+    file_names = [name for name, _ in file_tracks]
+    live_names = [name for name, _ in getinfo_tracks]
+    if file_names != live_names:
+        return f"the project file has label tracks {file_names}, Audacity {live_names}"
+    repeated = sorted({name for name in live_names if live_names.count(name) > 1})
+    if repeated:
+        return f"several label tracks are named {', '.join(map(repr, repeated))}"
+    for (name, exact), (_, live) in zip(file_tracks, getinfo_tracks):
+        if len(exact) != len(live):
+            return (
+                f"label track '{name}' has {len(exact)} labels in the project "
+                f"file, {len(live)} in Audacity"
+            )
+        for (start, end, text), (live_start, live_end, live_text) in zip(exact, live):
+            if (
+                text != live_text
+                or _as_getinfo_shows(start) != live_start
+                or _as_getinfo_shows(end) != live_end
+            ):
+                return (
+                    f"label track '{name}' differs between the project file and "
+                    f"Audacity at {live_start}"
+                )
+    return None
+
+
+def read_label_tracks_precisely(
+    aup3_path: Optional[Path],
+) -> Tuple[Dict[str, List[tuple]], bool]:
+    """``({track name: [(start, end, text), ...]}, precise)``: at full precision
+    from the open project's ``.aup3`` when it agrees with what Audacity reports
+    live (``precise`` True), else from GetInfo, rounded -- saying so, and why, in
+    one line on stderr. The caller needs ``precise`` to know that a rounded read
+    cannot tell an exact time from its rounding.
+
+    stderr, because a hotkey run that wrote there raises an alert, and a rounded
+    read must not pass unseen: it is what let ``quantize`` call an off-grid track
+    "already quantized". See :mod:`rebuildap.aup3_labels`.
+    """
+    live = get_label_tracks_via_getinfo()
+    if aup3_path is None:
+        reason = "the open project's file is not known"
+    else:
+        try:
+            exact = aup3_labels.read_label_tracks(aup3_path)
+        except aup3_labels.Aup3ReadError as e:
+            reason = str(e)
+        else:
+            reason = cross_check_label_tracks(exact, live)
+            if reason is None:
+                return dict(exact), True
+    print(PRECISION_FALLBACK_NOTE.format(reason=reason), file=sys.stderr)
+    return dict(live), False
+
+
 def _write_via_getinfo(
     indices: Iterable[int], aup3_path=None, stem=None
 ) -> List[Tuple[str, Path]]:
@@ -1363,10 +1465,44 @@ def replace_label_track(
         make_label_track_from_file(tmp, target_name)
         new_index = get_track_count() - 1
         move_track_to(new_index, target_index)
+        if new_index == target_index:
+            # No move, so no undo step yet to carry the import into the .aup3.
+            _flush_to_project_file(target_index)
         select_tracks([target_index])
     finally:
         tmp.unlink(missing_ok=True)
     return True
+
+
+def _flush_to_project_file(track_index: int) -> None:
+    """Make the ``.aup3`` catch up with a re-imported label track.
+
+    Measured 2026-09-30 (3.7.9): a scripted ``ImportLabels`` and the ``SetTrack``
+    rename write nothing to the ``.aup3`` and record no undo step, while every step
+    that records one writes the whole current state. A move back up is such a step;
+    a track that is already the bottom row gets none, and the next
+    :func:`read_label_tracks_precisely` would find the file stale. So re-set the
+    track's last label to its own text: a no-op that records one undo step.
+
+    ``SetLabel``'s ``Label=`` counts labels across all label tracks in track order,
+    regardless of selection (measured the same day), hence the sum over the tracks
+    above. Skipped for an empty track, and for a text holding a double quote, since
+    no escaping for one inside ``Text="..."`` is known -- the precise read then
+    falls back loudly instead.
+    """
+    labels_by_idx = _parse_labels_response(
+        _pa_do_timed("GetInfo: Type=Labels", timeout=5.0)
+    )
+    own = labels_by_idx.get(track_index, [])
+    if not own:
+        return
+    text = own[-1][2]
+    if '"' in text:
+        return
+    above = sum(
+        len(labels) for idx, labels in labels_by_idx.items() if idx < track_index
+    )
+    pa.do(f'SetLabel: Label={above + len(own) - 1} Text="{text}"')
 
 
 # --- quantize a selected label track to a beats track (`rebuildap quantize`) -
@@ -1501,14 +1637,17 @@ def quantize_selected_label_track(
     reference_name: Optional[str] = None,
     verbose: bool = False,
     whole_track: bool = False,
-) -> Tuple[str, int, str, str, bool]:
+    aup3_path: Optional[Path] = None,
+) -> Tuple[str, int, str, str, bool, bool]:
     """Quantize the selected label track to a beats track, in place.
 
     Returns ``(target_name, target_index, reference_name, quantized_content,
-    changed)`` -- the quantized track's name, the position it was restored to,
-    the beats track it was snapped to, the quantized labels in canonical ``.txt``
-    form (for the caller to write as the versioned source of truth), and whether
-    the project was actually modified. When the reference was chosen among
+    changed, precise)`` -- the quantized track's name, the position it was
+    restored to, the beats track it was snapped to, the quantized labels in
+    canonical ``.txt`` form (for the caller to write as the versioned source of
+    truth), whether the project was actually modified, and whether the label
+    times were read exactly (False: GetInfo's rounding, see
+    :func:`read_label_tracks_precisely`). When the reference was chosen among
     several beats tracks, that choice is announced on stderr before anything is
     touched (see :func:`resolve_quantize_targets`). Raises
     :class:`QuantizeError` on any precondition failure. See the module section
@@ -1528,6 +1667,14 @@ def quantize_selected_label_track(
     When the result equals the track's current content (already on the grid, or
     the selection caught no boundary), the remove/import/move swap is skipped
     entirely -- the project is left byte-identical -- and ``changed`` is ``False``.
+
+    **Exact times.** Label times come from ``aup3_path`` via
+    :func:`read_label_tracks_precisely`, falling back to GetInfo's 1 ms rounding
+    loudly. Both quantize_labels and the re-import get them at full digits, so a
+    snapped boundary lands on the beat bit-exact; only the returned versioned
+    content is 6-decimal. A boundary within :data:`QUANTIZE_TOLERANCE` of where it
+    already was counts as unmoved, which is what makes a track written from a
+    6-decimal file read as "already quantized".
     """
     tracks = get_tracks()
     target_index, target_name, _reference_index, reference_name, passed_over = (
@@ -1541,15 +1688,16 @@ def quantize_selected_label_track(
             f"'{target_name}' (passed over: {', '.join(passed_over)}).",
             file=sys.stderr,
         )
-    contents = get_label_tracks_content_via_getinfo()
+    labels, precise = read_label_tracks_precisely(aup3_path)
     script = locate_quantize_script()
 
     # Resolve the selection scope before mutating anything, so a selection-read
     # failure aborts cleanly (the caller turns it into "re-run with -f").
     selection = resolve_selection_scope(whole_track)
 
-    ref_tmp = _write_temp_label_txt(contents[reference_name])
-    target_tmp = _write_temp_label_txt(contents[target_name])
+    orig_labels = labels[target_name]
+    ref_tmp = _write_temp_label_txt(_format_exact_track_txt(labels[reference_name]))
+    target_tmp = _write_temp_label_txt(_format_exact_track_txt(orig_labels))
     try:
         if verbose:
             print(
@@ -1571,28 +1719,74 @@ def quantize_selected_label_track(
             ) from e
         # quantize_labels snapped every boundary; when a region is selected, keep
         # only the in-window boundaries and revert the rest to their originals.
-        orig_labels = _labels_from_txt(contents[target_name])
         quantized_labels = _labels_from_txt(target_tmp.read_text())
         if selection is None:
             final_labels = quantized_labels
         else:
             final_labels = _scope_to_selection(orig_labels, quantized_labels, selection)
+        final_labels = _unmoved_within_tolerance(orig_labels, final_labels)
         if verbose:
             # Our own summary, scoped to what was actually applied -- not
             # quantize_labels' whole-track figures, which overstate a scoped run.
             _report_applied_adjustment(orig_labels, final_labels, selection)
-        # This canonical form is both the versioned .txt and, re-written to the
-        # temp, the exact bytes imported -- so file and track cannot diverge.
+        # The versioned .txt, in Audacity's own 6-decimal export format. The
+        # project gets the same labels at full digits (below).
         quantized_content = _format_track_txt(final_labels)
     finally:
         ref_tmp.unlink(missing_ok=True)
         target_tmp.unlink(missing_ok=True)
-    # contents[...] is canonical too, so replace_label_track's plain compare tells
-    # whether anything actually moved, and skips the swap entirely when it did not.
+    # Both sides formatted the same exact way, so replace_label_track's plain
+    # compare tells whether anything moved, and skips the swap when nothing did.
     changed = replace_label_track(
-        target_index, target_name, quantized_content, contents[target_name]
+        target_index,
+        target_name,
+        _format_exact_track_txt(final_labels),
+        _format_exact_track_txt(orig_labels),
     )
-    return target_name, target_index, reference_name, quantized_content, changed
+    return (
+        target_name,
+        target_index,
+        reference_name,
+        quantized_content,
+        changed,
+        precise,
+    )
+
+
+# How far a boundary may sit from where it already was and still count as unmoved.
+# The versioned .txt holds 6 decimals, so a label imported from it sits up to 0.5 us
+# off the exact beat; without this every run would re-import it. A sample at
+# 44.1 kHz is ~22.7 us, so this stays far below anything audible or visible.
+QUANTIZE_TOLERANCE = 1e-6
+
+
+def _unmoved_within_tolerance(
+    orig: List[Tuple[float, float, str]], final: List[Tuple[float, float, str]]
+) -> List[Tuple[float, float, str]]:
+    """``final`` with every boundary that moved by at most
+    :data:`QUANTIZE_TOLERANCE` put back where ``orig`` had it."""
+
+    def settle(before: float, after: float) -> float:
+        return before if abs(after - before) <= QUANTIZE_TOLERANCE else after
+
+    return [
+        (settle(o_start, f_start), settle(o_end, f_end), f_text)
+        for (o_start, o_end, _), (f_start, f_end, f_text) in zip(orig, final)
+    ]
+
+
+def _format_exact_time(t: float) -> str:
+    """``t`` with every digit it has, positionally: ``repr`` would switch to
+    scientific notation for small times, which the label import rejects."""
+    return format(Decimal(repr(t)), "f")
+
+
+def _format_exact_track_txt(labels: Iterable[tuple]) -> str:
+    """Label ``.txt`` content at full precision, for files that feed
+    quantize_labels and the re-import rather than the versioned ``.txt``."""
+    return "".join(
+        f"{_format_exact_time(s)}\t{_format_exact_time(e)}\t{t}\n" for s, e, t in labels
+    )
 
 
 def _write_temp_label_txt(content: str) -> Path:

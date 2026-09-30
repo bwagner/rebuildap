@@ -139,13 +139,17 @@ manually-placed sub-beat label `C7#9`):
 | interactive `ExportLabels:` (dialog)    | `125.437458`| `126.671804`|
 | `GetInfo: Type=Labels` (non-interactive)| `125.437`   | `126.672`   |
 
-`GetInfo` truncates to **3 decimals** while the interactive export preserves
-**6 decimals**. Maximum rounding error: ~0.5 ms, i.e. ~22 samples @ 44.1 kHz —
-inaudible but not sample-accurate.
+`GetInfo` rounds to **6 significant digits** - 3 decimals between 100 s and 1000 s,
+more below - while the interactive export preserves **6 decimals**. Maximum rounding
+error at 100 s: ~0.5 ms, i.e. ~22 samples @ 44.1 kHz - inaudible but not
+sample-accurate.
 
-For beat-quantized labels (the common case, e.g. output of
+For labels on a coarse grid (e.g. output of
 [`DBNDownBeatTracker`](https://github.com/CPJKU/madmom/blob/main/bin/DBNDownBeatTracker)
-rounded to 2 decimals) both paths yield identical files.
+rounded to 2 decimals) both paths yield identical files. A beat grid with sub-millisecond
+times does not survive `GetInfo`, which is why `quantize` reads the exact times from the
+`.aup3` instead (see [quantize: exact label times](in-place-commands.md#quantize-exact-label-times)).
+`export` and `check` still use `GetInfo`.
 
 `rebuildap` uses the non-interactive `GetInfo` path exclusively. The interactive
 dialog path was offered behind `-p` / `--precise` until 2026-07-18 and has been
@@ -160,7 +164,7 @@ not justify keeping a second export path alive.
 A [Nyquist](https://manual.audacityteam.org/man/nyquist.html) plug-in route
 was investigated and rejected: Nyquist-side label access also goes through
 `aud-get-info` (see Steve Daulton's `ExportAllLabelTracks1.ny` for reference),
-so a custom Nyquist plug-in would have the **same 3-decimal precision floor**
+so a custom Nyquist plug-in would have the **same precision floor**
 as our direct `GetInfo` path — no advantage.
 
 ## Importing labels: normalizing the input format

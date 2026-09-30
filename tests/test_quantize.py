@@ -18,6 +18,7 @@ import pytest
 import rebuildap
 from rebuildap import audacity_funcs as af
 from rebuildap import audacity_present as ap
+from rebuildap.utils import normalize_label_line
 
 
 def _run_result(stderr="", stdout=""):
@@ -27,6 +28,18 @@ def _run_result(stderr="", stdout=""):
 
 def _track(name, kind="label", selected=False):
     return {"name": name, "kind": kind, "selected": 1 if selected else 0}
+
+
+def _fake_label_source(monkeypatch, contents):
+    """Fake the label read quantize makes, from ``.txt`` content per track name."""
+    monkeypatch.setattr(
+        af,
+        "read_label_tracks_precisely",
+        lambda aup3_path: (
+            {n: af._labels_from_txt(c) for n, c in contents.items()},
+            True,
+        ),
+    )
 
 
 # --- track-move arithmetic (restoring the original position) ----------------
@@ -241,11 +254,10 @@ def test_quantize_swaps_track_in_the_safe_order(monkeypatch, tmp_path):
         _track("beats"),
     ]
     monkeypatch.setattr(af, "get_tracks", lambda: tracks_before)
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        # 'chords' currently off the grid at 0.12; quantizing will move it.
-        lambda: {
+    # 'chords' currently off the grid at 0.12; quantizing will move it.
+    _fake_label_source(
+        monkeypatch,
+        {
             "chords": af._format_track_txt([(0.12, 0.12, "a")]),
             "beats": af._format_track_txt([(0.0, 0.0, "")]),
         },
@@ -274,7 +286,7 @@ def test_quantize_swaps_track_in_the_safe_order(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(af, "select_tracks", lambda idx: events.append(f"select:{idx}"))
 
-    target_name, target_index, _ref, content, changed = (
+    target_name, target_index, _ref, content, changed, _ = (
         af.quantize_selected_label_track(reference_name=None)
     )
 
@@ -302,10 +314,9 @@ def test_quantize_skips_the_swap_when_already_quantized(monkeypatch, tmp_path):
         _track("beats"),
     ]
     monkeypatch.setattr(af, "get_tracks", lambda: tracks)
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        lambda: {"chords": current, "beats": af._format_track_txt([(0.0, 0.0, "")])},
+    _fake_label_source(
+        monkeypatch,
+        {"chords": current, "beats": af._format_track_txt([(0.0, 0.0, "")])},
     )
     monkeypatch.setattr(af, "locate_quantize_script", lambda: tmp_path / "q.py")
     monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))  # whole track
@@ -320,7 +331,9 @@ def test_quantize_skips_the_swap_when_already_quantized(monkeypatch, tmp_path):
     monkeypatch.setattr(af, "move_track_to", lambda *a: events.append("move"))
     monkeypatch.setattr(af, "select_tracks", lambda *a: events.append("select"))
 
-    _, _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
+    _, _, _, content, changed, _ = af.quantize_selected_label_track(
+        reference_name="beats"
+    )
 
     assert changed is False
     assert events == [], "already-quantized track must not touch the project"
@@ -456,10 +469,9 @@ def _orchestrator_with_quantized(monkeypatch, tmp_path, current, quantized_out):
         _track("beats"),
     ]
     monkeypatch.setattr(af, "get_tracks", lambda: tracks)
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        lambda: {"chords": current, "beats": af._format_track_txt([(0.0, 0.0, "")])},
+    _fake_label_source(
+        monkeypatch,
+        {"chords": current, "beats": af._format_track_txt([(0.0, 0.0, "")])},
     )
     monkeypatch.setattr(af, "locate_quantize_script", lambda: tmp_path / "q.py")
     monkeypatch.setattr(
@@ -480,7 +492,9 @@ def test_quantize_returns_the_reference_it_snapped_to(monkeypatch, tmp_path):
     _orchestrator_with_quantized(monkeypatch, tmp_path, current, "1.1\t2.1\ta\n")
     monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))
 
-    _, _, reference_name, _, _ = af.quantize_selected_label_track(reference_name=None)
+    _, _, reference_name, _, _, _ = af.quantize_selected_label_track(
+        reference_name=None
+    )
 
     assert reference_name == "beats"
 
@@ -500,10 +514,8 @@ def test_choosing_among_several_beats_tracks_is_announced_on_stderr(
     ]
     monkeypatch.setattr(af, "get_tracks", lambda: tracks)
     grid = af._format_track_txt([(0.0, 0.0, "")])
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        lambda: {"chords": current, "beats": grid, "beats_alt": grid},
+    _fake_label_source(
+        monkeypatch, {"chords": current, "beats": grid, "beats_alt": grid}
     )
     monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))
 
@@ -533,7 +545,9 @@ def test_only_boundaries_inside_the_selection_are_snapped(monkeypatch, tmp_path)
     # Selection [4.0, 7.0]: only 'b' is inside -> only its boundaries move.
     monkeypatch.setattr(af, "read_time_selection", lambda: (4.0, 7.0))
 
-    _, _, _, content, changed = af.quantize_selected_label_track(reference_name="beats")
+    _, _, _, content, changed, _ = af.quantize_selected_label_track(
+        reference_name="beats"
+    )
 
     assert changed is True
     assert content == af._format_track_txt([(1.0, 2.0, "a"), (5.1, 6.1, "b")])
@@ -545,7 +559,7 @@ def test_no_region_quantizes_the_whole_track(monkeypatch, tmp_path):
     _orchestrator_with_quantized(monkeypatch, tmp_path, current, quantized)
     monkeypatch.setattr(af, "read_time_selection", lambda: (3.0, 3.0))  # cursor only
 
-    _, _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
+    _, _, _, content, _, _ = af.quantize_selected_label_track(reference_name="beats")
 
     assert content == af._format_track_txt([(1.1, 2.1, "a"), (5.1, 6.1, "b")])
 
@@ -559,7 +573,7 @@ def test_force_whole_track_skips_the_selection_read(monkeypatch, tmp_path):
 
     monkeypatch.setattr(af, "read_time_selection", boom)
 
-    _, _, _, content, _ = af.quantize_selected_label_track(
+    _, _, _, content, _, _ = af.quantize_selected_label_track(
         reference_name="beats", whole_track=True
     )
     assert content == af._format_track_txt([(1.1, 2.1, "a")])
@@ -586,10 +600,8 @@ def test_quantized_content_is_canonical_six_decimal(monkeypatch, tmp_path):
         _track("beats"),
     ]
     monkeypatch.setattr(af, "get_tracks", lambda: tracks)
-    monkeypatch.setattr(
-        af,
-        "get_label_tracks_content_via_getinfo",
-        lambda: {"chords": "9.0\t9.0\told\n", "beats": "y"},
+    _fake_label_source(
+        monkeypatch, {"chords": "9.0\t9.0\told\n", "beats": "0.0\t0.0\t\n"}
     )
     script = tmp_path / "quantize_labels.py"
     monkeypatch.setattr(af, "locate_quantize_script", lambda: script)
@@ -608,7 +620,7 @@ def test_quantized_content_is_canonical_six_decimal(monkeypatch, tmp_path):
     monkeypatch.setattr(af, "move_track_to", lambda *a: None)
     monkeypatch.setattr(af, "select_tracks", lambda *a: None)
 
-    _, _, _, content, _ = af.quantize_selected_label_track(reference_name="beats")
+    _, _, _, content, _, _ = af.quantize_selected_label_track(reference_name="beats")
     assert content == "0.000000\t1.000000\tverse\n"
 
 
@@ -796,19 +808,26 @@ def _stub_quantize(
     content="0.0\t1.0\tv\n",
     changed=True,
     reference="beats",
+    open_paths=(),
+    seen=None,
+    precise=True,
 ):
     """Fake the live layer for _quantize_open_project. Returns a list recording
     whether the (mutating) quantize step ran, so refusal tests can assert it did
-    not."""
+    not. ``open_paths`` is what Audacity holds open; ``seen`` (a dict) receives
+    the ``aup3_path`` quantize was handed."""
     import rebuildap as rb
 
     calls = []
     monkeypatch.setattr(rb, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: stem)
+    monkeypatch.setattr(ap, "open_project_paths", lambda: list(open_paths))
 
-    def fake_quantize(ref, verbose, whole_track=False):
+    def fake_quantize(ref, verbose, whole_track=False, aup3_path=None):
         calls.append(f"quantized:whole={whole_track}")
-        return (name, 1, reference, content, changed)
+        if seen is not None:
+            seen["aup3_path"] = aup3_path
+        return (name, 1, reference, content, changed, precise)
 
     monkeypatch.setattr(af, "quantize_selected_label_track", fake_quantize)
     return calls
@@ -998,8 +1017,9 @@ def test_selection_read_failure_exits_pointing_at_force(monkeypatch, tmp_path):
     (tmp_path / "song.aup3").write_text("")
     monkeypatch.setattr(rb, "prerequisites_met", lambda _command: True)
     monkeypatch.setattr(af, "open_project_stem", lambda *a, **k: "song")
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [])
 
-    def boom(ref, verbose, whole_track=False):
+    def boom(ref, verbose, whole_track=False, aup3_path=None):
         raise af.SelectionReadError("Nyquist did not report the selection")
 
     monkeypatch.setattr(af, "quantize_selected_label_track", boom)
@@ -1057,3 +1077,297 @@ def test_quantize_takes_no_second_positional(monkeypatch):
     with pytest.raises(SystemExit) as excinfo:
         rebuildap.main()
     assert excinfo.value.code != 0
+
+
+# --- exact label times (GetInfo rounds to 1 ms at 100 s) ----------------------
+#
+# Bar 59 of a real project: the beat sits at 100.68907563025209, GetInfo shows
+# 100.689, and a chord quantized through GetInfo landed at 100.689 -- 3.3 samples
+# early, and every later run called it "already quantized".
+
+BEAT = 100.68907563025209
+
+
+@pytest.mark.parametrize("t", [BEAT, 1.234e-07, 1e-06, 0.0, 5.0, 3600.123456789012])
+def test_exact_times_are_written_positionally_and_read_back_identical(t):
+    """The label import rejects scientific notation, and repr() would use it."""
+    text = af._format_exact_time(t)
+    assert "e" not in text.lower()
+    assert float(text) == t
+    line = normalize_label_line(f"{text}\t{text}\tx\n")
+    assert line is not None
+    assert float(line.split("\t")[0]) == t
+
+
+def _exact_world(monkeypatch, tmp_path, chords, quantized_out, seen):
+    """quantize_selected_label_track against exact times: 'chords' selected,
+    'beats' holding BEAT; the faked quantize_labels records the files it was
+    handed and writes ``quantized_out``; the import records the file it got."""
+    tracks = [
+        _track("song", kind="wave"),
+        _track("chords", selected=True),
+        _track("beats"),
+    ]
+    monkeypatch.setattr(af, "get_tracks", lambda: tracks)
+
+    def read(aup3_path):
+        seen["aup3_path"] = aup3_path
+        return {"chords": chords, "beats": [(BEAT, BEAT, "")]}, True
+
+    monkeypatch.setattr(af, "read_label_tracks_precisely", read)
+    monkeypatch.setattr(af, "locate_quantize_script", lambda: tmp_path / "q.py")
+    monkeypatch.setattr(af, "read_time_selection", lambda: (0.0, 0.0))  # whole track
+
+    def fake_run(argv, **kwargs):
+        seen["reference_file"] = Path(argv[-2]).read_text()
+        seen["target_file"] = Path(argv[-1]).read_text()
+        Path(argv[-1]).write_text(quantized_out)
+        return _run_result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(af, "remove_selected_tracks", lambda: None)
+
+    def fake_import(path, name=None):
+        seen["imported"] = Path(path).read_text()
+
+    monkeypatch.setattr(af, "make_label_track_from_file", fake_import)
+    monkeypatch.setattr(af, "get_track_count", lambda: 3)
+    monkeypatch.setattr(af, "move_track_to", lambda *a: None)
+    monkeypatch.setattr(af, "select_tracks", lambda *a: None)
+
+
+# quantize_labels.py writes the reference times it snapped to with repr().
+SNAPPED_TO_BEAT = f"{BEAT!r}\t{BEAT!r}\tC\n"
+
+
+def test_quantize_labels_is_handed_full_digit_times(monkeypatch, tmp_path):
+    seen = {}
+    _exact_world(
+        monkeypatch, tmp_path, [(100.689, 100.689, "C")], SNAPPED_TO_BEAT, seen
+    )
+
+    af.quantize_selected_label_track(reference_name="beats")
+
+    assert "100.68907563025209" in seen["reference_file"]
+
+
+def test_a_chord_a_few_samples_early_is_moved_exactly_onto_the_beat(
+    monkeypatch, tmp_path
+):
+    """The bug: 100.689 against a beat at 100.68907563025209 (75 us, 3.3 samples)."""
+    seen = {}
+    _exact_world(
+        monkeypatch, tmp_path, [(100.689, 100.689, "C")], SNAPPED_TO_BEAT, seen
+    )
+
+    _, _, _, content, changed, _ = af.quantize_selected_label_track(
+        reference_name="beats"
+    )
+
+    assert changed is True
+    imported = af._labels_from_txt(seen["imported"])
+    assert imported == [(BEAT, BEAT, "C")], "the project gets the beat bit-exact"
+    # The versioned file keeps Audacity's own 6-decimal export format.
+    assert content == "100.689076\t100.689076\tC\n"
+
+
+def test_within_a_microsecond_of_the_beat_counts_as_already_quantized(
+    monkeypatch, tmp_path
+):
+    """A label written from a 6-decimal file sits up to 0.5 us off the beat, and
+    must not be re-imported on every run."""
+    seen = {}
+    on_grid_to_six_decimals = [(100.689076, 100.689076, "C")]  # 0.37 us off
+    _exact_world(monkeypatch, tmp_path, on_grid_to_six_decimals, SNAPPED_TO_BEAT, seen)
+
+    _, _, _, content, changed, _ = af.quantize_selected_label_track(
+        reference_name="beats"
+    )
+
+    assert changed is False
+    assert "imported" not in seen, "an already-quantized track is left alone"
+    assert content == "100.689076\t100.689076\tC\n"
+
+
+def test_two_microseconds_off_the_beat_is_not_on_the_grid(monkeypatch, tmp_path):
+    """The tolerance covers 6-decimal rounding, nothing coarser."""
+    seen = {}
+    off = BEAT + 2e-6
+    _exact_world(monkeypatch, tmp_path, [(off, off, "C")], SNAPPED_TO_BEAT, seen)
+
+    _, _, _, _, changed, _ = af.quantize_selected_label_track(reference_name="beats")
+
+    assert changed is True
+    assert af._labels_from_txt(seen["imported"]) == [(BEAT, BEAT, "C")]
+
+
+def test_the_project_file_path_reaches_the_label_read(monkeypatch, tmp_path):
+    seen = {}
+    _exact_world(
+        monkeypatch, tmp_path, [(100.689, 100.689, "C")], SNAPPED_TO_BEAT, seen
+    )
+    project = tmp_path / "song.aup3"
+
+    af.quantize_selected_label_track(reference_name="beats", aup3_path=project)
+
+    assert seen["aup3_path"] == project
+
+
+# --- handing quantize the open project's file ---------------------------------
+
+
+def _quantize_in_cwd(monkeypatch, tmp_path, open_paths):
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    seen = {}
+    _stub_quantize(monkeypatch, stem="song", open_paths=open_paths, seen=seen)
+    rb._quantize_open_project(None, verbose=False)
+    return seen["aup3_path"]
+
+
+def test_quantize_is_handed_the_open_file_of_the_project(monkeypatch, tmp_path):
+    """The file Audacity holds open, not one derived from cwd: a same-stem copy
+    elsewhere may be the one in the window."""
+    open_file = Path("/Volumes/SSD/song/song.aup3")
+    other = Path("/elsewhere/other.aup3")
+
+    assert _quantize_in_cwd(monkeypatch, tmp_path, [other, open_file]) == open_file
+
+
+def test_quantize_is_handed_no_file_when_none_of_the_stem_is_open(
+    monkeypatch, tmp_path
+):
+    """Nothing known: the label read falls back to GetInfo and says so."""
+    other = Path("/elsewhere/other.aup3")
+
+    assert _quantize_in_cwd(monkeypatch, tmp_path, [other]) is None
+
+
+def test_quantize_is_handed_no_file_when_two_of_the_stem_are_open(
+    monkeypatch, tmp_path
+):
+    """Which one is in the front window is unknowable, so neither is guessed."""
+    one = Path("/a/song.aup3")
+    two = Path("/b/song.aup3")
+
+    assert _quantize_in_cwd(monkeypatch, tmp_path, [one, two]) is None
+
+
+def test_quantize_is_handed_the_file_even_when_audacity_holds_it_open_twice(
+    monkeypatch, tmp_path
+):
+    """Measured 2026-09-30: open_project_paths() listed the one open .aup3 twice
+    (Audacity holds two handles on it). The same path twice is one file, not two
+    copies."""
+    open_file = Path("/Volumes/SSD/song/song.aup3")
+
+    assert _quantize_in_cwd(monkeypatch, tmp_path, [open_file, open_file]) == open_file
+
+
+# --- the versioned file when the label read was rounded (GetInfo fallback) ------
+#
+# Measured live 2026-09-30: a fallback run rewrote an exact 100.689076 with
+# GetInfo's 100.689000 and reported "was already quantized; updated its file".
+# A rounded read cannot tell those apart, so it must not "correct" the file.
+
+
+def test_a_rounded_read_leaves_a_file_that_rounds_to_it_alone(tmp_path):
+    import rebuildap as rb
+
+    out = tmp_path / "chords_song.txt"
+    out.write_text("100.689076\t100.689076\tC\n")
+
+    wrote = rb._write_if_divergent(out, "100.689000\t100.689000\tC\n", rounded=True)
+
+    assert wrote is False
+    assert out.read_text() == "100.689076\t100.689076\tC\n"
+
+
+def test_an_exact_read_writes_the_same_difference(tmp_path):
+    """75 us is a real move when the read was exact - the bar-59 fix itself."""
+    import rebuildap as rb
+
+    out = tmp_path / "chords_song.txt"
+    out.write_text("100.689000\t100.689000\tC\n")
+
+    wrote = rb._write_if_divergent(out, "100.689076\t100.689076\tC\n", rounded=False)
+
+    assert wrote is True
+    assert out.read_text() == "100.689076\t100.689076\tC\n"
+
+
+def test_a_rounded_read_still_writes_a_change_it_can_see(tmp_path):
+    import rebuildap as rb
+
+    out = tmp_path / "chords_song.txt"
+    out.write_text("100.5\t100.5\tC\n")
+
+    assert rb._write_if_divergent(out, "100.689\t100.689\tC\n", rounded=True) is True
+    assert out.read_text() == "100.689\t100.689\tC\n"
+
+
+def test_a_rounded_read_matches_rounding_by_significant_digits_not_decimals(
+    tmp_path,
+):
+    """Past 1000 s six significant digits are 2 decimals: 1234.567891 shows as
+    1234.57, 2.1 ms away, and is still the same label."""
+    import rebuildap as rb
+
+    out = tmp_path / "chords_song.txt"
+    out.write_text("1234.567891\t1234.567891\tC\n")
+
+    assert rb._write_if_divergent(out, "1234.57\t1234.57\tC\n", rounded=True) is False
+
+
+@pytest.mark.parametrize(
+    "incoming",
+    [
+        "100.689000\t100.689000\tD\n",  # other text
+        "100.689000\t100.689000\tC\n5.0\t5.0\tE\n",  # another label
+    ],
+)
+def test_a_rounded_read_still_writes_other_differences(tmp_path, incoming):
+    import rebuildap as rb
+
+    out = tmp_path / "chords_song.txt"
+    out.write_text("100.689076\t100.689076\tC\n")
+
+    assert rb._write_if_divergent(out, incoming, rounded=True) is True
+
+
+def test_quantize_says_whether_its_label_read_was_exact(monkeypatch, tmp_path):
+    seen = {}
+    _exact_world(
+        monkeypatch, tmp_path, [(100.689, 100.689, "C")], SNAPPED_TO_BEAT, seen
+    )
+    labels = {"chords": [(100.689, 100.689, "C")], "beats": [(BEAT, BEAT, "")]}
+
+    monkeypatch.setattr(af, "read_label_tracks_precisely", lambda p: (labels, True))
+    assert af.quantize_selected_label_track(reference_name="beats")[-1] is True
+
+    monkeypatch.setattr(af, "read_label_tracks_precisely", lambda p: (labels, False))
+    assert af.quantize_selected_label_track(reference_name="beats")[-1] is False
+
+
+def test_a_fallback_quantize_leaves_an_exact_file_alone(monkeypatch, tmp_path, capsys):
+    """End to end through the CLI: the file keeps its exact times."""
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")
+    exact = "100.689076\t100.689076\tC\n"
+    (tmp_path / "chords_song.txt").write_text(exact)
+    _stub_quantize(
+        monkeypatch,
+        stem="song",
+        content="100.689000\t100.689000\tC\n",
+        changed=False,
+        precise=False,
+    )
+
+    rb._quantize_open_project(None, verbose=False)
+
+    assert (tmp_path / "chords_song.txt").read_text() == exact
+    assert "nothing to do" in capsys.readouterr().out

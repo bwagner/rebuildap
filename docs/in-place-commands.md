@@ -16,8 +16,10 @@ refuse. Back to the [README](../README.md).
 - **The track keeps its place.** The new content is imported as a fresh track, the old
   one removed, and the new one moved back to the row the old one held and reselected.
 - **File and track come from the same content.** The result is written to
-  `<track>_<stem>.txt` and imported from those same labels, so the two are identical
-  by construction; nothing is read back from Audacity.
+  `<track>_<stem>.txt` and imported from those same labels, so the two agree by
+  construction; nothing is read back from Audacity. (`quantize` imports them at full
+  precision and writes the file with Audacity's usual 6 decimals - see
+  [quantize: exact label times](#quantize-exact-label-times).)
 - **Nothing changes, nothing is touched.** If the result equals the track's current
   content, the project is left byte-identical (no mtime bump, no undo entry), and the
   `.txt` is rewritten only when it differs from what the file already holds.
@@ -90,6 +92,36 @@ Every outcome names the grid it used, chosen or not:
 Quantized label track 'chords' to 'beats':
   /path/to/project/chords_<stem>.txt
 ```
+
+## quantize: exact label times
+
+Audacity's scripting interface reports label times rounded to six significant digits:
+steps of 1 ms at 100 s (about 22 samples), 10 ms past 1000 s. Snapping to those would
+put a label a few samples off its beat, and a label a few samples off would look
+"already quantized". So `quantize` reads the exact times from the project's `.aup3` -
+the file Audacity has open, unsaved edits included - and snaps to them exactly.
+
+- **Checked against Audacity.** The times read from the file must round to what
+  Audacity reports, track for track and label for label. If they do not, or the file
+  cannot be read, or the open file is unknown (never saved, or two open copies with the
+  same name), `quantize` works from Audacity's rounded times and says so on stderr, so a
+  keyboard shortcut shows it:
+
+  ```
+  Label times read via GetInfo, exact only to 6 significant digits, 1 ms at 100 s (<reason>); 'already quantized' means only to that precision.
+  ```
+
+  A run like that cannot tell an exact time in the `.txt` from its rounding, so it
+  leaves a `.txt` alone whose times round to what it read, instead of "correcting" it
+  to rounded times.
+
+- **"Already quantized" means within 1 microsecond.** The versioned `.txt` keeps 6
+  decimals, so a track imported from it sits up to half a microsecond off the exact
+  beat; that counts as on the grid.
+- **One extra undo step, sometimes.** Audacity writes the `.aup3` only when it records
+  an undo step, and re-importing a track records none. Moving the track back to its row
+  does; when it is already the bottom row, `quantize` re-sets its last label to its own
+  text so the file catches up. Undoing that step changes nothing visible.
 
 ## transpose: spelling and text that is not a chord
 
