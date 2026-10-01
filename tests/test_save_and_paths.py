@@ -5,6 +5,7 @@ respected, so they run against tmp_path with the Audacity call faked out.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -631,15 +632,15 @@ _UNSET = object()  # "the test did not say", distinct from an explicit None
 
 
 def _stub_identity(
-    monkeypatch, titles, recent_paths, audio_stem="song", frontmost=_UNSET
+    monkeypatch, titles, open_paths, audio_stem="song", frontmost=_UNSET
 ):
-    """Fake the routes open_project_stem uses: the two it intersects, the
-    frontmost-window tiebreaker, and the audio-stem fallback.
+    """Fake the routes open_project_stem uses: the ``.aup3`` files Audacity
+    holds open, the frontmost window, and the audio-stem fallback.
 
-    ``frontmost`` defaults to the first title, since the common case is one
-    project window that is also the front one."""
-    monkeypatch.setattr(ap, "audacity_window_names", lambda: list(titles))
-    monkeypatch.setattr(af.pa, "do", lambda cmd: _menus_with(recent_paths))
+    ``titles`` are the open windows; only the first is used, as the default
+    ``frontmost``, since the common case is one project window that is also
+    the front one."""
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [Path(p) for p in open_paths])
     monkeypatch.setattr(af, "open_project_audio_stem", lambda *a, **k: audio_stem)
     if frontmost is _UNSET:
         frontmost = titles[0] if titles else None
@@ -721,16 +722,46 @@ def test_open_project_stem_refuses_when_the_frontmost_window_is_unknown(
         af.open_project_stem()
 
 
-def test_open_project_stem_does_not_need_the_frontmost_window_when_unambiguous(
+def test_open_project_stem_refuses_a_sole_candidate_that_is_not_in_front(
     tmp_path, monkeypatch
 ):
-    """One candidate is already the answer -- a dialog sitting in front of the
-    only open project must not turn a working export into a refusal."""
+    """One saved project open plus an unsaved one in front: the saved one is the
+    only candidate, but the pipe acts on the unsaved one. An unsaved project's
+    title (its audio stem) cannot be told apart from a dialog's, so anything but
+    the candidate in front refuses (decisions.md 2026-10-01)."""
     proj = _make_project(tmp_path, "song_G")
+    _stub_identity(monkeypatch, ["song_G", "scratch"], [str(proj)], frontmost="scratch")
+    with pytest.raises(af.ProjectIdentityError) as excinfo:
+        af.open_project_stem()
+    assert "song_G" in str(excinfo.value)
+
+
+def test_open_project_stem_refuses_a_sole_candidate_when_the_front_is_unknown(
+    tmp_path, monkeypatch
+):
+    proj = _make_project(tmp_path, "song_G")
+    _stub_identity(monkeypatch, ["song_G"], [str(proj)], frontmost=None)
+    with pytest.raises(af.ProjectIdentityError):
+        af.open_project_stem()
+
+
+def test_open_project_stem_finds_a_project_missing_from_open_recent(
+    tmp_path, monkeypatch
+):
+    """The 2026-09-30 overwrite: a throwaway opened via OpenProject2 never reached
+    Open Recent, so cousin_dupree was the sole candidate and got the throwaway's
+    labels. The files Audacity holds open know every open project."""
+    known = _make_project(tmp_path, "cousin_dupree", subdir="a")
+    throwaway = _make_project(tmp_path, "rb_probe", subdir="b")
     _stub_identity(
-        monkeypatch, ["song_G"], [str(proj)], frontmost="Preferences: Devices"
+        monkeypatch,
+        ["cousin_dupree", "rb_probe"],
+        [str(known), str(throwaway)],
+        frontmost="rb_probe",
     )
-    assert af.open_project_stem() == "song_G"
+    # Open Recent names only the other project; it must not be consulted.
+    monkeypatch.setattr(af.pa, "do", lambda cmd: _menus_with([str(known)]))
+    assert af.open_project_stem() == "rb_probe"
 
 
 def test_open_project_stem_same_stem_in_two_dirs_is_not_ambiguous(
@@ -744,51 +775,27 @@ def test_open_project_stem_same_stem_in_two_dirs_is_not_ambiguous(
     assert af.open_project_stem() == "song"
 
 
-def test_open_project_stem_ignores_recent_projects_that_are_not_open(
-    tmp_path, monkeypatch
-):
-    open_one = _make_project(tmp_path, "song_G")
-    closed = _make_project(tmp_path, "other", subdir="b")
-    _stub_identity(monkeypatch, ["song_G"], [str(closed), str(open_one)])
-    assert af.open_project_stem() == "song_G"
-
-
-def test_open_project_stem_skips_recent_entries_gone_from_disk(tmp_path, monkeypatch):
-    ghost = tmp_path / "gone" / "song_G.aup3"  # never created
-    _stub_identity(monkeypatch, ["song_G"], [str(ghost)], audio_stem="song")
-    assert af.open_project_stem() == "song"
-
-
 def test_open_project_stem_falls_back_to_audio_stem_and_says_so(
     tmp_path, monkeypatch, capsys
 ):
     """An unsaved project has no .aup3 stem to find; keep exporting rather than
-    blocking, but never do it silently -- the announced name is the whole point."""
+    blocking, but never do it silently -- the announced name is the whole point.
+    No open files is also what open_project_paths() returns when the process
+    cannot be inspected: "no evidence", so the same announced fallback."""
     _stub_identity(monkeypatch, ["song"], [], audio_stem="song")
     assert af.open_project_stem() == "song"
     err = capsys.readouterr().err
     assert "song" in err
 
 
-def test_open_project_stem_falls_back_when_the_menu_query_fails(monkeypatch, capsys):
-    def boom(cmd):
-        raise RuntimeError("pipe went away")
-
-    monkeypatch.setattr(ap, "audacity_window_names", lambda: ["song"])
-    monkeypatch.setattr(af.pa, "do", boom)
-    monkeypatch.setattr(af, "open_project_audio_stem", lambda *a, **k: "song")
-    assert af.open_project_stem() == "song"
-    assert capsys.readouterr().err
-
-
-def test_open_project_stem_falls_back_when_windows_cannot_be_listed(
-    tmp_path, monkeypatch
-):
-    """audacity_window_names() returns [] for an Accessibility refusal as well as
-    for "no windows", so an empty title list must not resolve to anything."""
+def test_open_project_stem_refuses_when_windows_cannot_be_read(tmp_path, monkeypatch):
+    """An Accessibility refusal hides every window, the front one included. The
+    open file still says a saved project is open, so naming the label files after
+    the audio track would be a guess - refuse instead (decisions.md 2026-10-01)."""
     proj = _make_project(tmp_path, "song_G")
     _stub_identity(monkeypatch, [], [str(proj)], audio_stem="song")
-    assert af.open_project_stem() == "song"
+    with pytest.raises(af.ProjectIdentityError):
+        af.open_project_stem()
 
 
 # --- _resolve_output_context stays cwd-only for the no-arg case ------------

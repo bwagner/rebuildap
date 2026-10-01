@@ -1039,37 +1039,27 @@ def find_recent_project_dirs(stem: str) -> List[Path]:
 
 
 def _open_project_aup3_stems() -> List[str]:
-    """Stems of the ``.aup3`` files that are both **open** and **on disk**.
+    """Stems of the projects that are open **as saved ``.aup3`` files**.
 
-    Intersects the only two routes Audacity offers, each useless alone:
+    Read from the files the Audacity process holds open
+    (:func:`audacity_present.open_project_paths`): it keeps each open project's
+    database open and drops it on close, so this is exactly the set of open saved
+    projects. An unsaved project has no file and is not in it.
 
-    - window titles (:func:`audacity_present.audacity_window_names`) say *which
-      projects are open* but carry no path, and an unsaved project is titled
-      with the stem of the audio it was built from -- a name with no file;
-    - Open Recent (:func:`_parse_recent_project_paths`) gives real, full paths
-      but is a recency list: it holds closed projects and can evict open ones.
+    Open Recent, intersected with window titles, used to be the route. It is a
+    recency list: a project opened by script (``OpenProject2``) never reaches it,
+    and one missing from it dropped out here, leaving another open project as the
+    "sole" candidate -- whose label file then received the missing project's
+    labels (2026-09-30). Window titles are no longer needed here either:
+    :func:`open_project_stem` checks the front window against the result, and a
+    file held open always has its project window.
 
-    Taking the intersection keeps only names that are simultaneously an open
-    window and a file that exists. Same-stem projects in different directories
-    collapse to one entry, which is right here -- the stem is the answer either
-    way, so there is nothing to be ambiguous about.
+    Same-stem projects in different directories collapse to one entry, which is
+    right here -- the stem is the answer either way.
     """
     from . import audacity_present as ap  # deferred: audacity_present imports us
 
-    titles = set(ap.audacity_window_names())
-    if not titles:
-        return []
-    try:
-        menus = pa.do("GetInfo: Type=Menus")
-    except Exception:  # noqa: BLE001 -- a flaky pipe just means "cannot identify"
-        return []
-    return sorted(
-        {
-            p.stem
-            for p in _parse_recent_project_paths(menus)
-            if p.stem in titles and p.exists()
-        }
-    )
+    return sorted({p.stem for p in ap.open_project_paths()})
 
 
 def open_project_stem() -> str:
@@ -1081,28 +1071,24 @@ def open_project_stem() -> str:
     variant ``song_G.aup3`` keeps the audio track called ``song``, and naming by
     the track wrote the variant's labels over the original's files.
 
-    With several projects open, the **frontmost** one wins: measured on 3.7.8
-    (2026-07-28), mod-script-pipe acts on the frontmost project window, so the
-    project the commands will touch is the project whose window is in front.
-    Refuses (:class:`ProjectIdentityError`) only when that tiebreaker cannot be
-    applied -- something other than a project is frontmost (a modal dialog, the
-    About box), or the front window cannot be read at all.
+    The answer must be the **frontmost** window: measured on 3.7.8 (2026-07-28),
+    mod-script-pipe acts on the frontmost project window. That holds even for a
+    sole candidate, since an unsaved project in front is no candidate at all and
+    its title cannot be told apart from a dialog's (decisions.md 2026-10-01).
+    Refuses (:class:`ProjectIdentityError`) when the front window is not a
+    candidate, or cannot be read at all -- an Accessibility refusal included,
+    since the open files still say a saved project is open.
 
-    Falls back to :func:`open_project_audio_stem` when no open window matches a
-    file on disk -- a never-saved project has no ``.aup3`` stem to find, and
-    blocking its export would be worse than naming it after its audio -- but
-    says so on stderr, since a silent fallback is exactly how the audio-track
-    name came to be used unnoticed.
+    Falls back to :func:`open_project_audio_stem` when no open window matches an
+    open ``.aup3`` -- a never-saved project has no stem to find, and blocking its
+    export would be worse than naming it after its audio -- but says so on
+    stderr, since a silent fallback is exactly how the audio-track name came to
+    be used unnoticed.
     """
     from . import audacity_present as ap  # deferred: audacity_present imports us
 
     stems = _open_project_aup3_stems()
-    if len(stems) == 1:
-        # Already unambiguous. Deliberately *not* checked against the frontmost
-        # window: a dialog in front of the only open project must not turn a
-        # working export into a refusal.
-        return stems[0]
-    if len(stems) > 1:
+    if stems:
         frontmost = ap.frontmost_audacity_window_name()
         if frontmost in stems:
             return frontmost
@@ -1110,16 +1096,15 @@ def open_project_stem() -> str:
         # (shared -1719), so it is never an answer -- it lands here.
         listed = "\n".join(f"{LIST_BULLET}{s}" for s in stems)
         raise ProjectIdentityError(
-            "Several projects are open and the frontmost window is not one of "
-            f"them, so it is unclear which these commands apply to:\n{listed}\n"
+            "The frontmost Audacity window is not one of the open saved projects, "
+            f"so it is unclear which project these commands apply to:\n{listed}\n"
             "Bring the project you mean to the front, then run rebuildap again."
         )
     stem = open_project_audio_stem()
     print(
         f"Could not identify the open project's .aup3 file, so its label files "
         f"will be named after its audio track ('{stem}'). This is right for a "
-        f"project that has never been saved; if it has been saved, check that "
-        f"it is still in Audacity's Open Recent menu.",
+        f"project that has never been saved.",
         file=sys.stderr,
     )
     return stem

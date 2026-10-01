@@ -262,24 +262,24 @@ saved-as states, since several of the workarounds above rest on it:
   `transpose` use it only to settle what would otherwise be a refusal: when Open
   Recent names several directories for the stem, they keep the one whose `.aup3`
   is open.
-- **Intersected with the window titles, it does yield the open project's file
-  name** - which is weaker than per-window identity but enough to *name* things.
-  A title says a project is open but carries no path; Open Recent gives a path
-  but not whether that project is still open. A stem that appears in both is a
-  project that is open and exists on disk, and that is what `open_project_stem`
-  returns to name the versioned `.txt` files (see
+- **So the open files, not Open Recent, name the open project** (since 2026-10-01).
+  `open_project_stem` takes its candidate stems from them to name the versioned
+  `.txt` files (see
   [label-export.md](label-export.md#which-project-the-exported-files-are-named-after)).
+  It used to intersect window titles with Open Recent, and a project missing from
+  Open Recent - one opened via `OpenProject2` never gets there - dropped out,
+  leaving another open project as the sole candidate to receive its labels.
 - **The pipe acts on the frontmost project window** (measured 2026-07-28, 3.7.8),
-  which supplies the last missing piece: titles say what is open, Open Recent
-  says where those files are, and the frontmost window says which of them a
-  command will touch. Two projects open with a uniquely named label track in
+  which supplies the last missing piece: the open files say which saved projects
+  are open and where, and the frontmost window says which of them a command will
+  touch. Two projects open with a uniquely named label track in
   each; `GetInfo: Type=Tracks` reported `chords_A` with the first in front and
   `chords_B` with the second, so it is genuinely the front window and not the
   first-opened or a fixed internal pointer. Focus was moved between the reads
   with AXRaise, so a plain window raise retargets the pipe - no click needed.
-  `open_project_stem` uses this to break the several-projects tie, and refuses
-  only when a non-project window (a dialog) is frontmost or the front window
-  cannot be read.
+  `open_project_stem` requires the front window to be one of the candidates, even
+  when there is only one, and refuses otherwise: an unsaved project in front has
+  no file, and its title cannot be told apart from a dialog's.
 - Saving retitles the window to the new stem.
 - **An *unsaved* project built by importing audio is also titled with that
   audio's stem** — not `Audacity`. Observed 2026-07-18 running `rebuildap build

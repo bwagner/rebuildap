@@ -99,9 +99,10 @@ visible.
 The files are named after the open project's **`.aup3` stem**, so a transposed
 copy `song_G.aup3` writes `chords_song_G.txt` and never touches the original's
 `chords_song.txt` - even though both projects share a audio track called `song`.
-With several projects open the **frontmost** one is used, which is also the one
-Audacity's scripting pipe acts on; if something other than a project is in front,
-rebuildap says so instead of guessing. See
+The **frontmost** project is used, which is also the one Audacity's scripting
+pipe acts on; if something other than a saved project is in front - a dialog, an
+unsaved project - rebuildap says so instead of guessing, even when only one
+project is open. See
 [Which project the exported files are named after](docs/label-export.md#which-project-the-exported-files-are-named-after).
 
 After a rebuild the project is saved as `<audio-stem>.aup3` **beside the audio

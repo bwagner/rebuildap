@@ -171,8 +171,8 @@ shortcut reports it as failed, not "ok". They refuse when:
 - **There is nothing to work on**: Audacity is not running, no window is open, or the
   frontmost project is empty or has no label tracks. The message names the command,
   e.g. "The frontmost Audacity project is empty; nothing to quantize."
-- **Several projects are open** and the frontmost window is not one of them (a dialog in
-  front, say).
+- **The frontmost window is not an open saved project** - a dialog, or an unsaved
+  project, in front - even when only one saved project is open.
 - **Not exactly one label track** is selected.
 - **`quantize` cannot settle on a beats track** (see the rules above).
 - **The project's directory is unknown** (not in Open Recent) or **still ambiguous**:

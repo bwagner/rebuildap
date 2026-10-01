@@ -17,42 +17,39 @@ its labels straight over the original's files.
 
 Audacity has no query for "which file is this project?" - `AXDocument` is
 `missing value` and there is no `GetInfo: Type=Project` (see
-[Audacity quirks](audacity-quirks.md)). So `open_project_stem` intersects the
-two partial routes:
+[Audacity quirks](audacity-quirks.md)). But the Audacity process keeps each open
+project's `.aup3` database open and drops it on close, so the files it holds open
+are exactly the **open saved projects**, with full paths. `open_project_stem`
+takes its candidates from there. Two same-stem projects in different directories
+collapse to one answer, which is correct here: the stem is the same either way.
 
-- **window titles** say which projects are *open*, but carry no path, and an
-  unsaved project is titled with the stem of the audio it was built from;
-- **Open Recent** gives real, full paths, but is a recency list - it holds
-  closed projects and can evict open ones.
+Audacity's **Open Recent** menu used to be that route, intersected with the window
+titles. It is a recency list: a project opened by script never reaches it, and one
+missing from it simply dropped out - on 2026-09-30 that left another open project as
+the only candidate, and its label file received the missing project's labels.
 
-A name that is both an open window and a file on disk is the project. Two
-same-stem projects in different directories collapse to one answer, which is
-correct here: the stem is the same either way.
+The answer must be the **frontmost** window, because mod-script-pipe acts on the
+frontmost project window - measured on 3.7.8 (2026-07-28) with two projects open
+and a uniquely named label track in each, the tracks reported by `GetInfo` followed
+the window focus. So the project rebuildap names its files after is the same project
+the commands themselves touch.
 
-When that yields **several differently-named projects**, the **frontmost** one
-wins. That is not a guess: mod-script-pipe acts on the frontmost project window,
-measured on 3.7.8 (2026-07-28) with two projects open and a uniquely named label
-track in each - the tracks reported by `GetInfo` followed the window focus. So
-the project rebuildap names its files after is the same project the commands
-themselves touch.
-
-It refuses only when that tiebreaker cannot be applied: something other than a
-project is frontmost (a modal dialog, the About box), or the front window cannot
-be read at all - `frontmost_audacity_window_name()` returns `None` for an
-Accessibility refusal as well as for "no windows", so `None` is never taken as an
-answer. Bring the project you mean to the front and run again.
-
-A single candidate is returned without consulting the frontmost window at all,
-so a dialog sitting in front of the only open project cannot turn a working
-export into a refusal.
+That holds even with **one** candidate. An unsaved project has no file, so with one
+saved project open and an unsaved one in front, the saved one is the only candidate
+while the commands act on the unsaved one; and an unsaved project's title cannot be
+told apart from a dialog's. So rebuildap refuses whenever the front window is not a
+candidate - a dialog, the About box, an unsaved project - or cannot be read at all:
+`frontmost_audacity_window_name()` returns `None` for an Accessibility refusal as
+well as for "no windows", so `None` is never taken as an answer. Bring the project
+you mean to the front and run again.
 
 One residual: the tie is broken at the moment identity is resolved, and nothing
 stops you switching windows mid-run. It is a seconds-wide gap, and every mode
 prints the full path it wrote, so a mis-targeted run is visible in its own
 output rather than silent.
 
-When it yields **nothing** - a never-saved project, or one evicted from Open
-Recent - it falls back to the audio track's name and says so on stderr. A
+When there are **no** candidates - only never-saved projects are open, or the
+open files cannot be read - it falls back to the audio track's name and says so on stderr. A
 never-saved project has no `.aup3` stem to find, and refusing to export it would
 be worse than naming it after its audio; announcing it is what keeps the
 fallback from going unnoticed, as the old unconditional behaviour did.
