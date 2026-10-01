@@ -149,15 +149,15 @@ the file Audacity has open, unsaved edits included - and snaps to them exactly.
 The label file goes into **the project's own directory**, wherever you run the command
 from:
 
-1. **The current directory**, if it holds the project - its `<stem>.aup3` or any
-   `*_<stem>.txt`. It is checked first, so running from a directory that holds a
-   same-named project writes there, even when the project open in Audacity is a copy
-   somewhere else.
-2. Otherwise, the directory of the `<stem>.aup3` in Audacity's **Open Recent** menu.
-3. When Open Recent lists **several** directories with that project name - a copy on
-   another disk, say - the one whose `.aup3` Audacity **currently has open** is used.
-   Audacity keeps an open project's database file open, which names its exact path
+1. **The directory of the `.aup3` Audacity has open.** Audacity keeps an open
+   project's database file open, which names its exact path
    ([how that was measured](audacity-quirks.md#what-window-titles-can-and-cannot-tell-you)).
+   This wins over everything else: a project in no Open Recent list (opened by a
+   script) is found, and running from `batch01/<song>` while a same-named copy on
+   another disk is the one open writes beside the copy, not into `batch01`.
+2. With nothing of that name held open - an unsaved project - **the current
+   directory**, if it holds the project (its `<stem>.aup3` or any `*_<stem>.txt`).
+3. Otherwise, the directory of the `<stem>.aup3` in Audacity's **Open Recent** menu.
 
 The directory is settled **before** the project is touched, so a location that cannot
 be determined is a clean refusal rather than a changed track with no file to show for
@@ -175,9 +175,10 @@ shortcut reports it as failed, not "ok". They refuse when:
   project, in front - even when only one saved project is open.
 - **Not exactly one label track** is selected.
 - **`quantize` cannot settle on a beats track** (see the rules above).
-- **The project's directory is unknown** (not in Open Recent) or **still ambiguous**:
-  several copies with the same name in Open Recent and none, or more than one, of them
-  open.
+- **Two projects with the same name are open** at once: which one is in front cannot
+  be told from the open files, so neither is written to.
+- **The project's directory is unknown** - nothing of that name open, and it is not in
+  Open Recent - or **ambiguous**: several directories with that name in Open Recent.
 - **The selection cannot be read.** The message points at `-f`, which skips the read.
 
 A bare `rebuildap export` differs on the first point: with nothing to export it says so

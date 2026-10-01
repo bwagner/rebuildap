@@ -624,7 +624,9 @@ def _transpose_in_cwd(monkeypatch, tmp_path, existing=None, **stub):
 
 
 def test_transpose_is_handed_the_open_file_of_the_project(monkeypatch, tmp_path):
-    open_file = Path("/Volumes/SSD/song/song.aup3")
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    open_file = copy / "song.aup3"
     seen, _ = _transpose_in_cwd(
         monkeypatch, tmp_path, open_paths=[open_file, open_file]
     )

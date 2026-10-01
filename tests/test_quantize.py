@@ -688,76 +688,47 @@ def test_quantize_labels_failure_becomes_a_quantize_error(monkeypatch, tmp_path)
 # --- resolving where -q writes the versioned .txt ---------------------------
 
 
-def test_resolve_project_dir_prefers_cwd_when_it_holds_the_project(
-    monkeypatch, tmp_path
-):
+def _nothing_open(monkeypatch):
+    """No .aup3 held open: an unsaved project, or a process that cannot be read."""
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [])
+
+
+def test_resolve_project_dir_uses_the_open_files_directory(monkeypatch, tmp_path):
+    """The 2026-09-30 incident's directory half: a project opened by script is in
+    no Open Recent list, but Audacity holds its file open, which names the place."""
+    import rebuildap as rb
+
+    def forbidden(_stem):
+        raise AssertionError("Open Recent consulted although the open file is known")
+
+    monkeypatch.chdir(tmp_path)
+    proj = Path("/scratch/rb_probe")
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [proj / "rb_probe.aup3"])
+    monkeypatch.setattr(af, "find_recent_project_dirs", forbidden)
+    assert rb._resolve_project_dir("rb_probe", "-q") == proj
+
+
+def test_resolve_project_dir_open_copy_wins_over_cwd(monkeypatch, tmp_path):
+    """Run from batch01/<song> while the same-stem copy on another disk is the one
+    open: the open copy is the project being changed, so its directory is where
+    the label file belongs - not batch01's, the other project's source of truth."""
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "song.aup3").write_text("")  # cwd holds a same-stem project
+    copy = Path("/Volumes/SSD/song")
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [copy / "song.aup3"])
+    assert rb._resolve_project_dir("song", "-q") == copy
+
+
+def test_resolve_project_dir_refuses_when_both_copies_are_open(monkeypatch, tmp_path):
+    # A set of open paths, not a window-to-path map: with both open, the frontmost
+    # window's stem cannot say which one it is - even when cwd holds one of them.
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "song.aup3").write_text("")
-    assert rb._resolve_project_dir("song", "-q") == tmp_path
-
-
-def test_resolve_project_dir_uses_the_sole_recent_project_dir(monkeypatch, tmp_path):
-    import rebuildap as rb
-
-    monkeypatch.chdir(tmp_path)  # cwd does not hold the project
-    proj = tmp_path / "proj"
-    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [proj])
-    assert rb._resolve_project_dir("song", "-q") == proj
-
-
-def test_resolve_project_dir_refuses_when_ambiguous(monkeypatch, tmp_path):
-    """Refusing is a failure, not a quiet success: the hotkey titles a run by its
-    exit status, and an exit-0 refusal read as "ok" live (2026-09-14)."""
-    import rebuildap as rb
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        af, "find_recent_project_dirs", lambda _s: [Path("/a"), Path("/b")]
-    )
-    monkeypatch.setattr(ap, "open_project_paths", lambda: [])
-    with pytest.raises(SystemExit) as excinfo:
-        rb._resolve_project_dir("song", "-q")
-    message = str(excinfo.value)
-    assert "/a" in message and "/b" in message
-
-
-def test_resolve_project_dir_refuses_when_unknown(monkeypatch, tmp_path):
-    import rebuildap as rb
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
-    with pytest.raises(SystemExit, match="not in Audacity's Open Recent"):
-        rb._resolve_project_dir("song", "-q")
-
-
-def test_resolve_project_dir_narrows_ambiguous_recents_to_the_open_copy(
-    monkeypatch, tmp_path
-):
-    """The live case: a copy on another disk is open, the same-stem original is
-    still in Open Recent. Audacity holds the open project's file open, which names
-    the copy exactly."""
-    import rebuildap as rb
-
-    monkeypatch.chdir(tmp_path)
-    original, copy = Path("/batch01/song"), Path("/Volumes/SSD/song")
-    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [original, copy])
-    monkeypatch.setattr(ap, "open_project_paths", lambda: [copy / "song.aup3"])
-
-    assert rb._resolve_project_dir("song", "-q") == copy
-
-
-def test_resolve_project_dir_still_refuses_when_both_copies_are_open(
-    monkeypatch, tmp_path
-):
-    # A set of open paths, not a window-to-path map: with both open, the frontmost
-    # window's stem cannot say which one it is.
-    import rebuildap as rb
-
-    monkeypatch.chdir(tmp_path)
-    a, b = Path("/a/song"), Path("/b/song")
-    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [a, b])
+    a, b = tmp_path, Path("/b/song")
     monkeypatch.setattr(
         ap, "open_project_paths", lambda: [a / "song.aup3", b / "song.aup3"]
     )
@@ -769,33 +740,64 @@ def test_resolve_project_dir_still_refuses_when_both_copies_are_open(
 def test_resolve_project_dir_ignores_open_projects_with_another_stem(
     monkeypatch, tmp_path
 ):
-    # An open 'other.aup3' that happens to sit in one candidate dir is not this
-    # project and must not break the tie.
+    # An open 'other.aup3' is not this project and must not answer for it.
     import rebuildap as rb
 
     monkeypatch.chdir(tmp_path)
-    a, b = Path("/a/song"), Path("/b/song")
-    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [a, b])
-    monkeypatch.setattr(ap, "open_project_paths", lambda: [a / "other.aup3"])
+    monkeypatch.setattr(ap, "open_project_paths", lambda: [Path("/a/other.aup3")])
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
     with pytest.raises(SystemExit):
         rb._resolve_project_dir("song", "-q")
 
 
-def test_resolve_project_dir_does_not_consult_open_files_when_unambiguous(
+# With nothing held open (an unsaved project), the older routes still apply.
+
+
+def test_resolve_project_dir_prefers_cwd_when_it_holds_the_project(
     monkeypatch, tmp_path
 ):
-    """The open-files route only settles what used to be a refusal; a sole Open
-    Recent candidate resolves exactly as before."""
     import rebuildap as rb
 
-    def forbidden():
-        raise AssertionError("open_project_paths consulted without ambiguity")
-
     monkeypatch.chdir(tmp_path)
+    _nothing_open(monkeypatch)
+    (tmp_path / "song.aup3").write_text("")
+    assert rb._resolve_project_dir("song", "-q") == tmp_path
+
+
+def test_resolve_project_dir_uses_the_sole_recent_project_dir(monkeypatch, tmp_path):
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)  # cwd does not hold the project
+    _nothing_open(monkeypatch)
     proj = tmp_path / "proj"
     monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [proj])
-    monkeypatch.setattr(ap, "open_project_paths", forbidden)
     assert rb._resolve_project_dir("song", "-q") == proj
+
+
+def test_resolve_project_dir_refuses_when_ambiguous(monkeypatch, tmp_path):
+    """Refusing is a failure, not a quiet success: the hotkey titles a run by its
+    exit status, and an exit-0 refusal read as "ok" live (2026-09-14)."""
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    _nothing_open(monkeypatch)
+    monkeypatch.setattr(
+        af, "find_recent_project_dirs", lambda _s: [Path("/a"), Path("/b")]
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        rb._resolve_project_dir("song", "-q")
+    message = str(excinfo.value)
+    assert "/a" in message and "/b" in message
+
+
+def test_resolve_project_dir_refuses_when_unknown(monkeypatch, tmp_path):
+    import rebuildap as rb
+
+    monkeypatch.chdir(tmp_path)
+    _nothing_open(monkeypatch)
+    monkeypatch.setattr(af, "find_recent_project_dirs", lambda _s: [])
+    with pytest.raises(SystemExit, match="not in Audacity's Open Recent"):
+        rb._resolve_project_dir("song", "-q")
 
 
 # --- persisting the quantized track to the versioned .txt -------------------
@@ -1216,6 +1218,13 @@ def test_the_project_file_path_reaches_the_label_read(monkeypatch, tmp_path):
 # --- handing quantize the open project's file ---------------------------------
 
 
+def _copy_dir(tmp_path):
+    """A same-stem copy's directory beside cwd, real so the label file can land."""
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    return copy
+
+
 def _quantize_in_cwd(monkeypatch, tmp_path, open_paths):
     import rebuildap as rb
 
@@ -1230,7 +1239,7 @@ def _quantize_in_cwd(monkeypatch, tmp_path, open_paths):
 def test_quantize_is_handed_the_open_file_of_the_project(monkeypatch, tmp_path):
     """The file Audacity holds open, not one derived from cwd: a same-stem copy
     elsewhere may be the one in the window."""
-    open_file = Path("/Volumes/SSD/song/song.aup3")
+    open_file = _copy_dir(tmp_path) / "song.aup3"
     other = Path("/elsewhere/other.aup3")
 
     assert _quantize_in_cwd(monkeypatch, tmp_path, [other, open_file]) == open_file
@@ -1245,14 +1254,22 @@ def test_quantize_is_handed_no_file_when_none_of_the_stem_is_open(
     assert _quantize_in_cwd(monkeypatch, tmp_path, [other]) is None
 
 
-def test_quantize_is_handed_no_file_when_two_of_the_stem_are_open(
+def test_quantize_refuses_untouched_when_two_of_the_stem_are_open(
     monkeypatch, tmp_path
 ):
-    """Which one is in the front window is unknowable, so neither is guessed."""
-    one = Path("/a/song.aup3")
-    two = Path("/b/song.aup3")
+    """Which one is in the front window is unknowable, so neither is guessed -
+    and the refusal comes before the project is changed."""
+    import rebuildap as rb
 
-    assert _quantize_in_cwd(monkeypatch, tmp_path, [one, two]) is None
+    monkeypatch.chdir(tmp_path)
+    calls = _stub_quantize(
+        monkeypatch,
+        stem="song",
+        open_paths=[Path("/a/song.aup3"), Path("/b/song.aup3")],
+    )
+    with pytest.raises(SystemExit):
+        rb._quantize_open_project(None, verbose=False)
+    assert calls == []
 
 
 def test_quantize_is_handed_the_file_even_when_audacity_holds_it_open_twice(
@@ -1261,7 +1278,7 @@ def test_quantize_is_handed_the_file_even_when_audacity_holds_it_open_twice(
     """Measured 2026-09-30: open_project_paths() listed the one open .aup3 twice
     (Audacity holds two handles on it). The same path twice is one file, not two
     copies."""
-    open_file = Path("/Volumes/SSD/song/song.aup3")
+    open_file = _copy_dir(tmp_path) / "song.aup3"
 
     assert _quantize_in_cwd(monkeypatch, tmp_path, [open_file, open_file]) == open_file
 

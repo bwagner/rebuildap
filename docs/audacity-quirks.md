@@ -259,9 +259,9 @@ saved-as states, since several of the workarounds above rest on it:
   `/Volumes/SSD_4T/...` while the same-stem original sat in Open Recent: only the
   copy's path appeared. It is still a *set*, not a window-to-path map, so two
   same-stem copies open at once stay indistinguishable. `quantize` and
-  `transpose` use it only to settle what would otherwise be a refusal: when Open
-  Recent names several directories for the stem, they keep the one whose `.aup3`
-  is open.
+  `transpose` write their label file beside the open `.aup3` (since 2026-10-01;
+  before, only to settle several Open Recent candidates), and refuse when two
+  same-stem copies are open.
 - **So the open files, not Open Recent, name the open project** (since 2026-10-01).
   `open_project_stem` takes its candidate stems from them to name the versioned
   `.txt` files (see

@@ -597,16 +597,33 @@ def _resolve_project_dir(stem, flag):
     Unlike a bare ``export`` (which only ever writes cwd), the in-place commands
     (``quantize``, ``transpose``) write to wherever the project actually lives,
     so the file and the just-modified project stay consistent no matter what cwd
-    it was run from: cwd when it holds the project, else the single directory Audacity's
-    Open Recent reports for this stem. When Open Recent names several (a same-stem
-    copy elsewhere), the candidates are narrowed to the one whose ``.aup3`` Audacity
-    actually holds open (:func:`audacity_present.open_project_paths`).
+    it was run from. The first answer is the ``.aup3`` Audacity holds open
+    (:func:`audacity_present.open_project_paths`): that is the project being
+    changed, wherever it is - in no Open Recent list (opened by script), or a
+    same-stem copy on another disk while cwd holds the original.
+
+    With nothing of that name held open (an unsaved project, or a process that
+    cannot be read), the older routes apply: cwd when it holds the project, else
+    the single directory Audacity's Open Recent reports for this stem.
 
     Refuses with :class:`SystemExit` - a non-zero exit, since nothing the user asked
-    for happened - when the directory stays ambiguous or is unknown, so a
-    source-of-truth file is never scattered. ``flag`` names the mode in the advice,
-    so the message says how to re-run what was actually attempted.
+    for happened - when two same-stem copies are open, or the directory is
+    ambiguous or unknown, so a source-of-truth file is never scattered. ``flag``
+    names the mode in the advice, so the message says how to re-run what was
+    actually attempted.
     """
+    open_dirs = sorted({p.parent for p in ap.open_project_paths() if p.stem == stem})
+    if len(open_dirs) == 1:
+        return open_dirs[0]
+    if len(open_dirs) > 1:
+        # A set of paths, not a window-to-path map: which copy is in front is
+        # not knowable, and cwd holding one of them says nothing about that.
+        listing = "\n".join(f"{_PATH_INDENT}{d}" for d in open_dirs)
+        raise SystemExit(
+            f"Two projects named '{stem}' are open; cannot tell which one to "
+            f"update:\n{listing}\nClose one of them and run `rebuildap {flag}` "
+            "again."
+        )
     cwd = Path.cwd()
     if af.dir_holds_project(cwd, stem):
         return cwd
@@ -614,10 +631,6 @@ def _resolve_project_dir(stem, flag):
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
-        open_dirs = {p.parent for p in ap.open_project_paths() if p.stem == stem}
-        narrowed = [d for d in candidates if d in open_dirs]
-        if len(narrowed) == 1:
-            return narrowed[0]
         listing = "\n".join(f"{_PATH_INDENT}{d}" for d in candidates)
         raise SystemExit(
             f"The open project '{stem}' lives in more than one place; cannot tell "
