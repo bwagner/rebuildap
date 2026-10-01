@@ -51,6 +51,9 @@ require("rebuildap"):bindHotkeys({
 Point `package.path` at wherever you cloned rebuildap. Either binding may be
 omitted; binding neither loads the module but registers nothing.
 
+`rebuildap hotkeys` prints this snippet with your clone's path already filled in,
+so it can be pasted as is.
+
 ### Configuration
 
 Defaults suit a standard install and need no configuration. To override, call
@@ -127,9 +130,25 @@ for what I typed" rather than a fixed interval.
 
 ## Verify
 
-Open a project, select one label track and drag out a time region, then press the
-shortcut. You should see a brief on-screen alert as it starts, then a notification with
-the result. Either way it is appended to `~/.hammerspoon/rebuildap.log`:
+`rebuildap hotkeys` asks the running Hammerspoon what it has bound:
+
+```console
+$ rebuildap hotkeys
+Hammerspoon shortcuts (they act on the frontmost Audacity project):
+  quantize   ⌘⌃⇧Q  cmd+control+shift+Q  - snap the selected label track to its beats track
+  transpose  ⌘⌃⇧T  cmd+control+shift+T  - pick an interval, then transpose the selected label track
+Guide: /path/to/rebuildap/docs/hotkeys.md
+```
+
+It reads the bindings the module records, so it reports the running configuration,
+not what `init.lua` says. It needs the `hs.ipc` line from the snippet and a running
+Hammerspoon; without either it says it cannot tell, and prints the snippet. A module
+loaded before it started recording its bindings asks you to reload the config. It
+never launches Hammerspoon or loads the module itself.
+
+Then try one: open a project, select one label track and drag out a time region,
+then press the shortcut. You should see a brief on-screen alert as it starts, then a
+notification with the result. Either way it is appended to `~/.hammerspoon/rebuildap.log`:
 
 ```
 2026-07-28 23:47:47  rebuildap quantize - ok

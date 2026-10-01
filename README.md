@@ -71,7 +71,7 @@ and normalized on import; the versioned files are never rewritten. A line that
 fits none of these is rejected up front, naming the file and line
 ([details](docs/label-export.md#importing-labels-normalizing-the-input-format)).
 
-There are six commands:
+There are seven commands:
 
 | Command | What happens |
 |---|---|
@@ -81,6 +81,7 @@ There are six commands:
 | `import LABELFILE` | one label file is added to the open project as a label track |
 | `quantize [BEATS_TRACK]` | the open project's selected label track is snapped to a beats track, in place ([details](docs/in-place-commands.md)) |
 | `transpose SEMITONES` | the open project's selected label track has its chords transposed, in place ([details](docs/in-place-commands.md)) |
+| `hotkeys` | the Hammerspoon shortcuts bound to `quantize` and `transpose` are listed, or how to install them is printed ([details](docs/hotkeys.md)) |
 
 `rebuildap` on its own means `rebuildap export`, so the common case stays a
 single word.
@@ -141,6 +142,7 @@ positional arguments:
     import       Import a label file into the open project as a label track.
     quantize     Snap the selected label track to a beats track, in place.
     transpose    Transpose the selected label track's chords, in place.
+    hotkeys      Show the keyboard shortcuts for quantize and transpose.
 
 options:
   -h, --help     show this help message and exit
@@ -151,6 +153,9 @@ Run `rebuildap COMMAND --help` for a command's own options.
 `rebuildap` on its own means `rebuildap export`: the open project's
 label tracks are written into the current directory - the selected
 ones, or all of them if none are selected.
+
+`rebuildap hotkeys` shows the keyboard shortcuts for quantize and
+transpose, or how to install them.
 ```
 
 Each command's own options:
@@ -255,6 +260,8 @@ options:
   -f, --force    Quantize the whole track without reading the time selection.
                  By default only the boundaries inside an active selection are
                  snapped.
+
+Can run from a keyboard shortcut: see `rebuildap hotkeys`.
 ```
 
 ```console
@@ -275,6 +282,19 @@ options:
   -f, --force    Transpose the whole track without reading the time selection.
                  By default only the labels starting inside an active
                  selection are transposed.
+
+Can run from a keyboard shortcut: see `rebuildap hotkeys`.
+```
+
+```console
+usage: rebuildap hotkeys [-h] [-v]
+
+Show which Hammerspoon shortcuts run quantize and transpose, as the running
+Hammerspoon reports them - or, when none are bound, how to install them.
+
+options:
+  -h, --help     show this help message and exit
+  -v, --verbose  Enable verbose mode.
 ```
 
 ## Prerequisites
@@ -320,7 +340,8 @@ looking at, so they can be driven from a global hotkey instead of a terminal —
 scripting pipe targets the frontmost project window, which is the one in front of
 you. The Hammerspoon side ships with the repo as
 `contrib/hammerspoon/rebuildap.lua`; [setting it up](docs/hotkeys.md) is two lines
-in your Hammerspoon config.
+in your Hammerspoon config. `rebuildap hotkeys` prints those lines with your clone's
+path filled in, and once they are in place lists the shortcuts Hammerspoon has bound.
 Entirely optional, and not every command suits it: a no-argument `export` writes
 into the current directory, which a hotkey does not meaningfully have.
 

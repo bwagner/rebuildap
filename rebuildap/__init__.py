@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import audacity_funcs as af
 from . import audacity_present as ap
-from . import git_tracking
+from . import git_tracking, hotkeys
 from .utils import normalize_label_line
 from .version_info import get_version_info
 
@@ -870,8 +870,17 @@ def _report_exports(exported):
 _PROG = "rebuildap"
 
 # The commands, in the order --help lists them: the two that take a file first,
-# then the two that read a project, then the two that rewrite one in place.
-_COMMANDS = ("build", "export", "check", "import", "quantize", "transpose")
+# then the two that read a project, then the two that rewrite one in place, then
+# the one that shows how to run those two from a keyboard shortcut.
+_COMMANDS = (
+    "build",
+    "export",
+    "check",
+    "import",
+    "quantize",
+    "transpose",
+    "hotkeys",
+)
 
 # A first token that is not a command gets this one prepended, so `rebuildap`,
 # `rebuildap -v` and `rebuildap song.aup3` all keep working.
@@ -920,6 +929,15 @@ def _resolve_command(parser, argv):
     return [_DEFAULT_COMMAND, *argv]
 
 
+# The in-place commands' help points at `hotkeys`, since those two are the ones a
+# shortcut can run.
+_SHORTCUT_POINTER = f"Can run from a keyboard shortcut: see `{_PROG} hotkeys`."
+
+
+def _show_hotkeys():
+    hotkeys.show()
+
+
 def _build_parser():
     """The command-line surface: one subparser per command.
 
@@ -944,6 +962,9 @@ def _build_parser():
             f"`{_PROG}` on its own means `{_PROG} export`: the open project's\n"
             f"label tracks are written into the current directory - the selected\n"
             f"ones, or all of them if none are selected.\n"
+            f"\n"
+            f"`{_PROG} hotkeys` shows the keyboard shortcuts for quantize and\n"
+            f"transpose, or how to install them.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1119,6 +1140,7 @@ def _build_parser():
             "already in the open project, re-import it at its original "
             "position, and update its versioned .txt to match."
         ),
+        epilog=_SHORTCUT_POINTER,
     )
     quantize.add_argument(
         "beats_track",
@@ -1157,6 +1179,7 @@ def _build_parser():
             "text that is not a chord (section markers, lyric cues, fingerings) "
             "is left alone and reported."
         ),
+        epilog=_SHORTCUT_POINTER,
     )
     transpose.add_argument(
         "semitones",
@@ -1191,6 +1214,18 @@ def _build_parser():
             force=args.force,
         )
     )
+
+    hotkeys_ = commands.add_parser(
+        "hotkeys",
+        parents=[common],
+        help="Show the keyboard shortcuts for quantize and transpose.",
+        description=(
+            "Show which Hammerspoon shortcuts run quantize and transpose, as the "
+            "running Hammerspoon reports them - or, when none are bound, how to "
+            "install them."
+        ),
+    )
+    hotkeys_.set_defaults(func=lambda args: _show_hotkeys())
     return parser
 
 

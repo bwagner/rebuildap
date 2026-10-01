@@ -71,6 +71,11 @@ M.pathEntries = nil
 M.logFile = HOME .. "/.hammerspoon/rebuildap.log"
 M.notify = true
 
+--- What bindHotkeys bound, by command: {mods = ..., key = ..., idx = "⌘⌃⇧Q"}.
+--- Read by `rebuildap hotkeys` over `hs -c`, so it reports what is bound in the
+--- running Hammerspoon rather than what a config file once said.
+M.bindings = {}
+
 --- Override any of `binary`, `pathEntries`, `logFile`, `notify`.
 function M.setup(opts)
   for k, v in pairs(opts or {}) do M[k] = v end
@@ -252,22 +257,27 @@ end
 
 --- mapping: {quantize = {mods, key}, transpose = {mods, key}}; both optional.
 function M:bindHotkeys(mapping)
+  local function record(command, binding, hotkey)
+    M.bindings[command] = {mods = binding[1], key = binding[2], idx = hotkey.idx}
+  end
   if mapping.quantize then
-    hs.hotkey.bind(mapping.quantize[1], mapping.quantize[2], function()
-      M.run({"quantize"})
-    end)
+    record("quantize", mapping.quantize,
+      hs.hotkey.bind(mapping.quantize[1], mapping.quantize[2], function()
+        M.run({"quantize"})
+      end))
   end
   if mapping.transpose then
-    hs.hotkey.bind(mapping.transpose[1], mapping.transpose[2], function()
-      -- Check BEFORE showing the chooser: once it is up, Hammerspoon is
-      -- frontmost and the check would always fail.
-      local ok, why = audacityFrontmost()
-      if not ok then
-        hs.alert.show("rebuildap: " .. why)
-        return
-      end
-      showTransposeChooser()
-    end)
+    record("transpose", mapping.transpose,
+      hs.hotkey.bind(mapping.transpose[1], mapping.transpose[2], function()
+        -- Check BEFORE showing the chooser: once it is up, Hammerspoon is
+        -- frontmost and the check would always fail.
+        local ok, why = audacityFrontmost()
+        if not ok then
+          hs.alert.show("rebuildap: " .. why)
+          return
+        end
+        showTransposeChooser()
+      end))
   end
   return self
 end
