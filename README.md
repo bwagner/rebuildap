@@ -124,6 +124,49 @@ Label tracks are exported non-interactively through Audacity's scripting pipe, s
 batch runs never stop for a dialog. Label times are read exactly from the `.aup3`,
 since the pipe rounds them: [Exporting label tracks](docs/label-export.md).
 
+## Pitch-shifted variants
+
+A song often needs a second version in another key, or retuned because the
+recording is not at A = 440 Hz. Such a variant lives beside the original under
+its own stem, and the two never see each other's label files:
+
+```console
+mysong.mp3            mysong.aup3            chords_mysong.txt           beats_mysong.txt
+mysong_VARIANT.flac   mysong_VARIANT.aup3    chords_mysong_VARIANT.txt   beats_mysong_VARIANT.txt
+```
+
+`VARIANT` is any name you like, e.g. the new key (`mysong_D`) or the tuning
+(`mysong_a440`). Since `*_mysong.txt` does not match `chords_mysong_D.txt`,
+`build`, `export` and `check` keep the two sets apart.
+
+The variant's audio is derived from the original, so it does not need to be
+committed - only the command that made it. One way, with
+[Rubber Band](https://breakfastquay.com/rubberband/):
+
+```console
+rubberband-r3 --pitch SHIFT mysong.mp3 mysong_VARIANT.flac
+```
+
+`SHIFT` is in semitones, positive raises, negative lowers, and it may be
+fractional for microtonal shifts (`--pitch -0.37`). To correct the tuning, give
+the frequency ratio instead, as a decimal: a recording at A = 443 Hz needs
+440/443, so `--frequency 0.99323`. (A fraction does not work: `--frequency
+440/443` is read as 440.) Rubber Band keeps
+the tempo, so the shifted audio lines up with the original in time.
+
+Then build the variant like any other project, from its own audio:
+
+```console
+rebuildap build mysong_VARIANT.flac
+```
+
+Its label files can start as copies of the original's, renamed to the variant's
+stem. After a whole-semitone shift, select the chords track and run
+`rebuildap transpose SHIFT`; a tuning correction leaves the chord names as they
+are. Keep the exact `rubberband` command next to the song (a notes file, say):
+it is all you need to regenerate the variant audio, and with it the
+`mysong_VARIANT.aup3`, after deleting the `.flac`.
+
 ## Usage
 
 ```console
